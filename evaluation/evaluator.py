@@ -220,7 +220,7 @@ class Evaluator:
         game = game_state.game
         
         # Record current board state
-        board_state = game.get_board_state()
+        board_state = game.get_state_representation()
         
         if move is None:
             # Invalid move - check retry limit
@@ -298,7 +298,7 @@ class Evaluator:
         game = game_state.game
         
         # Record final board state
-        final_board = game.get_board_state()
+        final_board = game.get_state_representation()
         self.game_logs["games"][str(game_id)]["final_board"] = final_board
         
         # Determine outcome

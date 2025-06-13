@@ -3,6 +3,7 @@ import sys
 import os
 import logging
 from typing import List, Dict, Any, Optional, Tuple
+from games.game import Game
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -17,13 +18,14 @@ except ImportError:
 class VLLMAgent(Agent):
     """Agent using vLLM for LLM-based game play"""
     
-    def __init__(self, llm_engine, sampling_params, tokenizer, name: str = "VLLMAgent"):
+    def __init__(self, llm_engine, sampling_params, tokenizer, name: str = "VLLMAgent", enable_thinking: bool = True):
         super().__init__(name)
         self.llm_engine = llm_engine
         self.sampling_params = sampling_params
         self.tokenizer = tokenizer
+        self.enable_thinking = enable_thinking
     
-    def get_move(self, game) -> str:
+    def get_move(self, game:Game) -> str:
         """
         Get a move from the LLM
         
@@ -46,7 +48,7 @@ class VLLMAgent(Agent):
         # Return raw output without any parsing
         return raw_output
     
-    def _prepare_prompt(self, game):
+    def _prepare_prompt(self, game:Game):
         """
         Prepare the prompt for the LLM
         
@@ -57,7 +59,7 @@ class VLLMAgent(Agent):
             Tuple of (prompt_text, legal_moves)
         """
         try:
-            messages = game.get_messages_for_llm()
+            messages = game.get_chat_history_for_llm(self)
             legal_moves = game.get_legal_moves()
             
             if not legal_moves:
@@ -65,7 +67,7 @@ class VLLMAgent(Agent):
                 
             # Use tokenizer to format chat messages
             prompt_text = self.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.enable_thinking
             )
             
             return prompt_text, legal_moves

@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 from typing import List, Dict, Any, Optional
+from games.game import Game
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -52,7 +53,7 @@ class APIAgent(Agent):
             
         self.system_message = "You are a helpful assistant who is an expert at playing games."
     
-    def get_move(self, game) -> Any:
+    def get_move(self, game:Game) -> Any:
         """
         Get a move from the API service
         
@@ -63,7 +64,7 @@ class APIAgent(Agent):
             Move object (format depends on game implementation)
         """
         # Get prompt and legal moves
-        messages = game.get_messages_for_llm()
+        messages = game.get_chat_history_for_llm(self)
         legal_moves = game.get_legal_moves()
         
         if not legal_moves:
@@ -71,15 +72,14 @@ class APIAgent(Agent):
             
         # Generate response from API
         try:
-            prompt = messages[1]['content']  # Using the user message as prompt
-            response = self.get_prompt_stream(prompt)
+            response = self.get_prompt_stream(messages)
             
             return response
         except Exception as e:
             logging.error(f"Error getting move from API: {e}")
             return "Error getting move from API"
     
-    def get_prompt_stream(self, prompt):
+    def get_prompt_stream(self, messages: List[Dict[str, str]]) -> str:
         """
         Use API to get streaming response
         
@@ -92,10 +92,7 @@ class APIAgent(Agent):
         try:
             completion = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": self.system_message},
-                    {"role": "user", "content": prompt}
-                ],
+                messages=messages,
                 stream=True,
                 timeout=600
             )

@@ -4,6 +4,8 @@ import sys
 import os
 import re
 import logging
+from agents.agent import Agent
+from agents.vllm_agent import VLLMAgent
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -36,6 +38,18 @@ class TicTacToeGame(Game):
             "You are player '{player_symbol}'.\n"
             "Your available legal moves (row,col format): [{legal_moves_str}]\n"
             "Provide your thinking and final move in the specified format: `<think>...</think>(r,c)`"
+        )
+        self.system_prompt_no_thinking = (
+            "You are playing Tic-Tac-Toe. Your task is to select the BEST move from the available legal moves. "
+            "Your response MUST be your chosen (row,col) coordinate. "
+            "Example: If you want to play on row 1, column 2, your output should be `(1,2)`. "
+            "Do not add any other text or explanation."
+        )
+        self.user_prompt_template_no_thinking = (
+            "{board_representation}\n"
+            "You are player '{player_symbol}'.\n"
+            "Your available legal moves (row,col format): [{legal_moves_str}]\n"
+            "Choose your move by selecting one of the available (row,col) pairs. Your move (e.g., `(1,2)` for row 1, column 2):"
         )
     
     def update_prompt(self, system_prompt=None, user_prompt_template=None):
@@ -126,26 +140,29 @@ class TicTacToeGame(Game):
             s += "  ".join(row_str_parts) + "\n" 
         return s.strip()
     
-    def get_prompt_for_agent(self) -> str:
+    def get_chat_history_for_llm(self, llm: Agent) -> str:
         """Get prompt for agent describing current game state"""
         board_representation = self.get_board_representation_for_llm()
         player_symbol = self.get_player_symbol(self.current_player)
         legal_moves = self.get_legal_moves()
         legal_moves_str = ", ".join([f"({r},{c})" for r, c in legal_moves])
         
-        user_prompt = self.user_prompt_template.format(
+        system_prompt = self.system_prompt
+        user_prompt_template = self.user_prompt_template
+        
+        if isinstance(llm, VLLMAgent) and not llm.enable_thinking:
+            system_prompt = self.system_prompt_no_thinking
+            user_prompt = self.user_prompt_template_no_thinking
+            
+        user_prompt = user_prompt_template.format(
             board_representation=board_representation,
             player_symbol=player_symbol,
             legal_moves_str=legal_moves_str
         )
         
-        return user_prompt
-    
-    def get_messages_for_llm(self):
-        """Get messages format for LLM"""
         return [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": self.get_prompt_for_agent()}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
     
     def parse_move_from_output(self, raw_output: str, legal_moves: List[Tuple[int, int]]) -> Optional[Tuple[int, int]]:

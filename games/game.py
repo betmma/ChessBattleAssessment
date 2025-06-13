@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional, Any
+from typing import List, Tuple, Optional, Any, Dict
+from agents.agent import Agent
 
 class Game(ABC):
     """Base abstract class for all games. All game implementations must inherit from this."""
@@ -35,17 +36,9 @@ class Game(ABC):
         pass
     
     @abstractmethod
-    def get_prompt_for_agent(self) -> str:
-        """Get the prompt to send to an agent, describing the current game state"""
+    def get_chat_history_for_llm(self, llm: Agent) -> List[Dict[str, str]]:
+        """Get the chat history to send to llm, including system prompt and game state"""
         pass
-    
-    def get_board_state(self) -> str:
-        """
-        Get a string representation of the board state for logging purposes.
-        Default implementation returns the prompt for agent, but subclasses
-        may override with a more suitable representation.
-        """
-        return self.get_prompt_for_agent()
     
     @abstractmethod
     def parse_move_from_output(self, raw_output: str, legal_moves: List[Any]) -> Optional[Any]:
