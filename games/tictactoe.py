@@ -41,15 +41,15 @@ class TicTacToeGame(Game):
         )
         self.system_prompt_no_thinking = (
             "You are playing Tic-Tac-Toe. Your task is to select the BEST move from the available legal moves. "
-            "Your response MUST be your chosen (row,col) coordinate. "
-            "Example: If you want to play on row 1, column 2, your output should be `(1,2)`. "
+            "Your response MUST be your chosen (row,col) coordinate, enclosed in square brackets. "
+            "Example: If you want to play on row 1, column 2, your output should be `[1,2]`. "
             "Do not add any other text or explanation."
         )
         self.user_prompt_template_no_thinking = (
             "{board_representation}\n"
             "You are player '{player_symbol}'.\n"
             "Your available legal moves (row,col format): [{legal_moves_str}]\n"
-            "Choose your move by selecting one of the available (row,col) pairs. Your move (e.g., `(1,2)` for row 1, column 2):"
+            "Choose your move by selecting one of the available (row,col) pairs. Your move (e.g., `[1,2]` for row 1, column 2):"
         )
     
     def update_prompt(self, system_prompt=None, user_prompt_template=None):
@@ -152,8 +152,7 @@ class TicTacToeGame(Game):
         
         if isinstance(llm, VLLMAgent) and not llm.enable_thinking:
             system_prompt = self.system_prompt_no_thinking
-            user_prompt = self.user_prompt_template_no_thinking
-            
+            user_prompt_template = self.user_prompt_template_no_thinking
         user_prompt = user_prompt_template.format(
             board_representation=board_representation,
             player_symbol=player_symbol,
@@ -178,6 +177,8 @@ class TicTacToeGame(Game):
         """
         # Look for coordinates in the format (row,col)
         match = re.findall(r'\(\s*([0-2])\s*,\s*([0-2])\s*\)', raw_output)
+        if not match:
+            match = re.findall(r'\[\s*([0-2])\s*,\s*([0-2])\s*\]', raw_output)
         if match:
             last_match = match[-1]
             move_coord = (int(last_match[0]), int(last_match[1]))
