@@ -10,13 +10,12 @@ class RandomAgent(Agent):
         if seed is not None:
             random.seed(seed)
     
-    def get_move(self, game, player_value) -> str:
+    def get_move(self, game) -> str:
         """
         Get a random move from the legal moves
         
         Args:
             game: Game object
-            player_value: Agent's player value in the game
             
         Returns:
             str: Random legal move as string

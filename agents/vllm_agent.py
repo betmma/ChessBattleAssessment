@@ -23,13 +23,12 @@ class VLLMAgent(Agent):
         self.sampling_params = sampling_params
         self.tokenizer = tokenizer
     
-    def get_move(self, game, player_value) -> str:
+    def get_move(self, game) -> str:
         """
         Get a move from the LLM
         
         Args:
             game: Game object
-            player_value: Agent's player value in the game
             
         Returns:
             str: Raw LLM output string (unparsed)

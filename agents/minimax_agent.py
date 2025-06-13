@@ -15,17 +15,17 @@ class MinimaxAgent(Agent):
         # Cache for storing evaluated positions
         self.score_cache = {}
     
-    def get_move(self, game, player_value) -> str:
+    def get_move(self, game) -> str:
         """
         Get best move using Minimax algorithm
         
         Args:
             game: Game object
-            player_value: Current player value (1 for X, -1 for O)
             
         Returns:
             str: Best move as string
         """
+        player_value = game.get_current_player()
         best_score = -float('inf') if player_value == 1 else float('inf')
         best_move = None
         legal_moves = game.get_legal_moves()

@@ -52,13 +52,12 @@ class APIAgent(Agent):
             
         self.system_message = "You are a helpful assistant who is an expert at playing games."
     
-    def get_move(self, game, player_value) -> Any:
+    def get_move(self, game) -> Any:
         """
         Get a move from the API service
         
         Args:
             game: Game object
-            player_value: Agent's player value in the game
             
         Returns:
             Move object (format depends on game implementation)

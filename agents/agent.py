@@ -8,13 +8,12 @@ class Agent(ABC):
         self.name = name
     
     @abstractmethod
-    def get_move(self, game, player_value) -> str:
+    def get_move(self, game) -> str:
         """
         Get a move from the agent
         
         Args:
             game: Game object
-            player_value: Agent's player value
             
         Returns:
             str: The chosen move as a string
@@ -28,7 +27,6 @@ class Agent(ABC):
         Args:
             game_contexts: List of dictionaries with:
                            - 'game': Game object
-                           - 'player_value': Agent's player value
                            
         Returns:
             List[str]: List of moves as strings
@@ -36,8 +34,7 @@ class Agent(ABC):
         moves = []
         for context in game_contexts:
             game = context.get('game')
-            player_value = context.get('player_value')
-            move = self.get_move(game, player_value)
+            move = self.get_move(game)
             moves.append(move)
         return moves
     
