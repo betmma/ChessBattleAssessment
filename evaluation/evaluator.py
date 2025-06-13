@@ -24,6 +24,7 @@ class GameState:
         self.agent2_player_value = agent2_player_value
         self.is_complete = False
         self.forfeit_by = None
+        self.retry_count = 0
         
     def get_current_agent_info(self):
         """Get the current agent and their player value"""
@@ -32,12 +33,25 @@ class GameState:
             return self.agent1, self.agent1_player_value, 'agent1'
         else:
             return self.agent2, self.agent2_player_value, 'agent2'
+    
+    def get_retry_count(self) -> int:
+        """Get retry count"""
+        return self.retry_count
+    
+    def increment_retry_count(self):
+        """Increment retry count"""
+        self.retry_count += 1
+    
+    def reset_retry_count(self):
+        """Reset retry count"""
+        self.retry_count = 0
 
 class Evaluator:
     """Handles evaluation of agents on games"""
     
-    def __init__(self, config=None):
+    def __init__(self, config=None, retry_limit=3):
         self.config = config or Config()
+        self.retry_limit = retry_limit
         self.results = {}
         self.game_logs = {}  
         
@@ -201,7 +215,7 @@ class Evaluator:
         return newly_completed
     
     def _apply_move_and_log(self, game_state: GameState, move, agent_name: str, agent_display_name: str):
-        """Apply a move and log the result"""
+        """Apply a move and log the result with retry logic"""
         game_id = game_state.game_id
         game = game_state.game
         
@@ -209,19 +223,28 @@ class Evaluator:
         board_state = game.get_board_state()
         
         if move is None:
-            # Invalid move - forfeit
-            logging.debug(f"Game {game_id}: {agent_display_name} made invalid move (None)")
+            # Invalid move - check retry limit
+            current_retries = game_state.retry_count
+            game_state.increment_retry_count()
+            
+            logging.debug(f"Game {game_id}: {agent_display_name} made invalid move (None), retry {current_retries + 1}/{self.retry_limit}")
+            
             self.game_logs["games"][str(game_id)]["moves"].append({
                 "agent": agent_name,
                 "board_before": board_state,
                 "move": None,
                 "valid": False,
-                "result": "forfeit",
+                "retry_count": current_retries + 1,
+                "result": "retry" if current_retries + 1 < self.retry_limit else "forfeit",
                 "raw_output": str(move)
             })
-            game.force_forfeit()
-            game_state.forfeit_by = agent_name
-            game_state.is_complete = True
+            
+            if current_retries + 1 >= self.retry_limit:
+                # Exceeded retry limit - forfeit
+                logging.warning(f"Game {game_id}: {agent_display_name} exceeded retry limit ({self.retry_limit}), forfeiting")
+                game.force_forfeit()
+                game_state.forfeit_by = agent_name
+                game_state.is_complete = True
         else:
             # Parse and apply move
             logging.debug(f"Game {game_id}: {agent_display_name} attempting move {move}")
@@ -230,24 +253,44 @@ class Evaluator:
             if parsed_move is not None:
                 success = game.make_move(parsed_move)
             
-            # Record move result
-            self.game_logs["games"][str(game_id)]["moves"].append({
-                "agent": agent_name,
-                "board_before": board_state,
-                "move": str(parsed_move) if parsed_move is not None else str(move),
-                "valid": success,
-                "result": "forfeit" if not success else "continued",
-                "raw_output": str(move)
-            })
-            
             if not success:
-                # Invalid move - forfeit
-                logging.debug(f"Game {game_id}: {agent_display_name} made invalid move {move}")
-                game.force_forfeit()
-                game_state.forfeit_by = agent_name
-                game_state.is_complete = True
+                # Invalid move - check retry limit
+                current_retries = game_state.retry_count
+                game_state.increment_retry_count()
+                
+                logging.debug(f"Game {game_id}: {agent_display_name} made invalid move {move}, retry {current_retries + 1}/{self.retry_limit}")
+                
+                self.game_logs["games"][str(game_id)]["moves"].append({
+                    "agent": agent_name,
+                    "board_before": board_state,
+                    "move": str(parsed_move) if parsed_move is not None else str(move),
+                    "valid": False,
+                    "retry_count": current_retries + 1,
+                    "result": "retry" if current_retries + 1 < self.retry_limit else "forfeit",
+                    "raw_output": str(move)
+                })
+                
+                if current_retries + 1 >= self.retry_limit:
+                    # Exceeded retry limit - forfeit
+                    logging.warning(f"Game {game_id}: {agent_display_name} exceeded retry limit ({self.retry_limit}), forfeiting")
+                    game.force_forfeit()
+                    game_state.forfeit_by = agent_name
+                    game_state.is_complete = True
             else:
+                # Valid move - reset retry counter and log success
+                game_state.reset_retry_count()
+                
                 logging.debug(f"Game {game_id}: {agent_display_name} successfully made move {move}")
+                
+                self.game_logs["games"][str(game_id)]["moves"].append({
+                    "agent": agent_name,
+                    "board_before": board_state,
+                    "move": str(parsed_move),
+                    "valid": True,
+                    "retry_count": 0,
+                    "result": "continued",
+                    "raw_output": str(move)
+                })
     
     def _finalize_game_log(self, game_state: GameState):
         """Finalize the game log with outcome"""
