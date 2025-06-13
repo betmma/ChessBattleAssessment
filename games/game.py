@@ -39,6 +39,14 @@ class Game(ABC):
         """Get the prompt to send to an agent, describing the current game state"""
         pass
     
+    def get_board_state(self) -> str:
+        """
+        Get a string representation of the board state for logging purposes.
+        Default implementation returns the prompt for agent, but subclasses
+        may override with a more suitable representation.
+        """
+        return self.get_prompt_for_agent()
+    
     @abstractmethod
     def parse_move_from_output(self, raw_output: str, legal_moves: List[Any]) -> Optional[Any]:
         """Parse a move from an agent's output string, validating against legal moves"""
@@ -47,4 +55,12 @@ class Game(ABC):
     @abstractmethod
     def reset(self) -> None:
         """Reset the game to initial state"""
+        pass
+        
+    def force_forfeit(self) -> None:
+        """
+        Force the current player to forfeit the game.
+        Default implementation does nothing, but subclasses should implement
+        if they need special handling for forfeits.
+        """
         pass

@@ -1,33 +1,29 @@
 import random
-import sys
-import os
-
-# Add project root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from agents.agent import Agent
+from typing import List, Dict
+from .agent import Agent
 
 class RandomAgent(Agent):
-    """Agent that randomly selects from legal moves"""
+    """Agent that makes random legal moves"""
     
-    def __init__(self, name: str = "RandomAgent"):
+    def __init__(self, name: str = "RandomAgent", seed: int = None):
         super().__init__(name)
+        if seed is not None:
+            random.seed(seed)
     
-    def get_move(self, game, player_value) -> any:
-        """Randomly select from legal moves"""
+    def get_move(self, game, player_value) -> str:
+        """
+        Get a random move from the legal moves
+        
+        Args:
+            game: Game object
+            player_value: Agent's player value in the game
+            
+        Returns:
+            str: Random legal move as string
+        """
         legal_moves = game.get_legal_moves()
         if not legal_moves:
-            return None
-        return random.choice(legal_moves)
-    
-    def supports_batch(self) -> bool:
-        """Random agent supports batch processing"""
-        return True
-    
-    def get_batch_moves(self, game_contexts):
-        """Process multiple games in batch"""
-        moves = []
-        for context in game_contexts:
-            game = context.get('game')
-            player_value = context.get('player_value')
-            moves.append(self.get_move(game, player_value))
-        return moves
+            return 'No legal moves available'
+        
+        move = random.choice(legal_moves)
+        return str(move)

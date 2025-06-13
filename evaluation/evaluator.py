@@ -2,6 +2,7 @@ import os
 import time
 import random
 import logging
+import json
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
 from tqdm import tqdm
@@ -17,6 +18,7 @@ class Evaluator:
     def __init__(self, config=None):
         self.config = config or Config()
         self.results = {}
+        self.game_logs = {}  
         
     def evaluate_agent_vs_agent(self, agent1, agent2, game_class, num_games=None):
         """
@@ -37,16 +39,22 @@ class Evaluator:
         logging.info(f"Starting evaluation: {agent1.name} vs {agent2.name} on {game_class.__name__}")
         results = {"wins_agent1": 0, "wins_agent2": 0, "draws": 0, "forfeits_agent1": 0, "forfeits_agent2": 0}
         
+        log_dir = os.path.join(self.config.OUTPUT_DIR, "game_logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_filename = f"{agent1.name}_vs_{agent2.name}_{game_class.__name__}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        self.game_logs = {
+            "agent1": agent1.name,
+            "agent2": agent2.name,
+            "game": game_class.__name__,
+            "games": {}
+        }
+        
         # Create game instances based on the number of games
         active_games_data = []
         games_launched = 0
         games_completed = 0
         
         pbar = tqdm(total=num_games, desc=f"{agent1.name} vs {agent2.name}")
-        
-        # Determine if we can batch process for each agent
-        can_batch_agent1 = agent1.supports_batch()
-        can_batch_agent2 = agent2.supports_batch()
         
         while games_completed < num_games:
             # Phase 1: Process existing games
@@ -78,9 +86,19 @@ class Evaluator:
                         'game_id': game_id
                     })
             
-            # Get moves from agents (batch if supported)
-            agent1_moves = agent1.get_batch_moves(agent1_contexts) if agent1_contexts else []
-            agent2_moves = agent2.get_batch_moves(agent2_contexts) if agent2_contexts else []
+            # Get moves from agents using get_batch_moves
+            agent1_moves = []
+            agent2_moves = []
+            
+            # Get agent1 moves
+            if agent1_contexts:
+                logging.debug(f"Getting moves for {len(agent1_contexts)} games from agent1 ({agent1.name})")
+                agent1_moves = agent1.get_batch_moves(agent1_contexts)
+            
+            # Get agent2 moves  
+            if agent2_contexts:
+                logging.debug(f"Getting moves for {len(agent2_contexts)} games from agent2 ({agent2.name})")
+                agent2_moves = agent2.get_batch_moves(agent2_contexts)
             
             # Apply agent1 moves
             for idx, move in enumerate(agent1_moves):
@@ -89,19 +107,58 @@ class Evaluator:
                 game_data = next((g for g in active_games_data if g['game_id'] == game_id), None)
                 
                 if game_data and not game_data['game'].is_game_over():
+                    # Record game state and action
+                    if str(game_id) not in self.game_logs["games"]:
+                        self.game_logs["games"][str(game_id)] = {
+                            "agent1_player_value": game_data['agent1_player_value'],
+                            "agent2_player_value": game_data['agent2_player_value'],
+                            "moves": [],
+                            "outcome": None
+                        }
+                    
+                    # Record current board state
+                    board_state = game_data['game'].get_board_state()
+                    
                     if move is None:
                         # Invalid move - forfeit
+                        logging.debug(f"Game {game_id}: Agent1 ({agent1.name}) made invalid move (None)")
+                        self.game_logs["games"][str(game_id)]["moves"].append({
+                            "agent": "agent1",
+                            "board_before": board_state,
+                            "move": None,
+                            "valid": False,
+                            "result": "forfeit",
+                            "raw_output": str(move)
+                        })
                         game_data['game'].force_forfeit()
                         game_data['forfeit_by'] = 'agent1'
                         indices_to_remove.append(active_games_data.index(game_data))
                     else:
-                        # Apply move
-                        success = game_data['game'].make_move(move)
+                        # Parse and apply move
+                        logging.debug(f"Game {game_id}: Agent1 ({agent1.name}) attempting move {move}")
+                        parsed_move = game_data['game'].parse_move_from_output(str(move), game_data['game'].get_legal_moves())
+                        success = False
+                        if parsed_move is not None:
+                            success = game_data['game'].make_move(parsed_move)
+                        
+                        # Record move result
+                        self.game_logs["games"][str(game_id)]["moves"].append({
+                            "agent": "agent1",
+                            "board_before": board_state,
+                            "move": str(parsed_move) if parsed_move is not None else str(move),
+                            "valid": success,
+                            "result": "forfeit" if not success else "continued",
+                            "raw_output": str(move)
+                        })
+                        
                         if not success:
                             # Invalid move - forfeit
+                            logging.debug(f"Game {game_id}: Agent1 ({agent1.name}) made invalid move {move}")
                             game_data['game'].force_forfeit()
                             game_data['forfeit_by'] = 'agent1'
                             indices_to_remove.append(active_games_data.index(game_data))
+                        else:
+                            logging.debug(f"Game {game_id}: Agent1 ({agent1.name}) successfully made move {move}")
             
             # Apply agent2 moves
             for idx, move in enumerate(agent2_moves):
@@ -110,25 +167,65 @@ class Evaluator:
                 game_data = next((g for g in active_games_data if g['game_id'] == game_id), None)
                 
                 if game_data and not game_data['game'].is_game_over():
+                    # Record game state and action
+                    if str(game_id) not in self.game_logs["games"]:
+                        self.game_logs["games"][str(game_id)] = {
+                            "agent1_player_value": game_data['agent1_player_value'],
+                            "agent2_player_value": game_data['agent2_player_value'],
+                            "moves": [],
+                            "outcome": None
+                        }
+                    
+                    # Record current board state
+                    board_state = game_data['game'].get_board_state()
+                    
                     if move is None:
                         # Invalid move - forfeit
+                        logging.debug(f"Game {game_id}: Agent2 ({agent2.name}) made invalid move (None)")
+                        self.game_logs["games"][str(game_id)]["moves"].append({
+                            "agent": "agent2",
+                            "board_before": board_state,
+                            "move": None,
+                            "valid": False,
+                            "result": "forfeit",
+                            "raw_output": str(move)
+                        })
                         game_data['game'].force_forfeit()
                         game_data['forfeit_by'] = 'agent2'
                         indices_to_remove.append(active_games_data.index(game_data))
                     else:
-                        # Apply move
-                        success = game_data['game'].make_move(move)
+                        # Parse and apply move
+                        logging.debug(f"Game {game_id}: Agent2 ({agent2.name}) attempting move {move}")
+                        parsed_move = game_data['game'].parse_move_from_output(str(move), game_data['game'].get_legal_moves())
+                        success = False
+                        if parsed_move is not None:
+                            success = game_data['game'].make_move(parsed_move)
+                        
+                        # Record move result
+                        self.game_logs["games"][str(game_id)]["moves"].append({
+                            "agent": "agent2",
+                            "board_before": board_state,
+                            "move": str(parsed_move) if parsed_move is not None else str(move),
+                            "valid": success,
+                            "result": "forfeit" if not success else "continued",
+                            "raw_output": str(move)
+                        })
+                        
                         if not success:
                             # Invalid move - forfeit
+                            logging.debug(f"Game {game_id}: Agent2 ({agent2.name}) made invalid move {move}")
                             game_data['game'].force_forfeit()
                             game_data['forfeit_by'] = 'agent2'
                             indices_to_remove.append(active_games_data.index(game_data))
+                        else:
+                            logging.debug(f"Game {game_id}: Agent2 ({agent2.name}) successfully made move {move}")
             
             # Clean up completed games
             indices_to_remove = sorted(list(set(indices_to_remove)), reverse=True)
             for i in indices_to_remove:
                 ended_game_data = active_games_data.pop(i)
                 game = ended_game_data['game']
+                game_id = ended_game_data['game_id']
                 
                 if game.is_game_over():
                     games_completed += 1
@@ -136,17 +233,34 @@ class Evaluator:
                     
                     # Determine outcome
                     winner = game.check_winner()
+                    outcome = None
+                    
                     if 'forfeit_by' in ended_game_data:
                         if ended_game_data['forfeit_by'] == 'agent1':
                             results['forfeits_agent1'] += 1
+                            outcome = f"agent1_forfeit"
+                            logging.debug(f"Game {game_id}: Agent1 ({agent1.name}) forfeited")
                         else:
                             results['forfeits_agent2'] += 1
+                            outcome = f"agent2_forfeit"
+                            logging.debug(f"Game {game_id}: Agent2 ({agent2.name}) forfeited")
                     elif winner == ended_game_data['agent1_player_value']:
                         results['wins_agent1'] += 1
+                        outcome = f"agent1_win"
+                        logging.debug(f"Game {game_id}: Agent1 ({agent1.name}) won")
                     elif winner == ended_game_data['agent2_player_value']:
                         results['wins_agent2'] += 1
+                        outcome = f"agent2_win"
+                        logging.debug(f"Game {game_id}: Agent2 ({agent2.name}) won")
                     elif winner == 0:
                         results['draws'] += 1
+                        outcome = "draw"
+                        logging.debug(f"Game {game_id}: Game ended in a draw")
+                    
+                    if str(game_id) in self.game_logs["games"]:
+                        final_board = game.get_board_state()
+                        self.game_logs["games"][str(game_id)]["final_board"] = final_board
+                        self.game_logs["games"][str(game_id)]["outcome"] = outcome
             
             # Phase 2: Launch new games
             num_to_add = min(self.config.VLLM_MAX_CONCURRENT_GAMES - len(active_games_data), 
@@ -166,6 +280,7 @@ class Evaluator:
                     agent2_player_value = 1
                 
                 game_id = games_launched
+                logging.debug(f"Starting new game {game_id}: {agent1.name}({agent1_player_value}) vs {agent2.name}({agent2_player_value})")
                 
                 new_game_data = {
                     'game': new_game,
@@ -210,6 +325,11 @@ class Evaluator:
         results['agent2_name'] = agent2.name
         results['game_name'] = game_class.__name__
         results['total_games'] = num_games
+        
+        game_log_path = os.path.join(log_dir, log_filename)
+        with open(game_log_path, 'w') as f:
+            json.dump(self.game_logs, f, indent=2)
+        logging.info(f"Game logs saved to {game_log_path}")
         
         return results
     

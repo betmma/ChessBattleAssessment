@@ -15,7 +15,7 @@ class MinimaxAgent(Agent):
         # Cache for storing evaluated positions
         self.score_cache = {}
     
-    def get_move(self, game, player_value):
+    def get_move(self, game, player_value) -> str:
         """
         Get best move using Minimax algorithm
         
@@ -24,18 +24,18 @@ class MinimaxAgent(Agent):
             player_value: Current player value (1 for X, -1 for O)
             
         Returns:
-            Best move coordinates
+            str: Best move as string
         """
         best_score = -float('inf') if player_value == 1 else float('inf')
         best_move = None
         legal_moves = game.get_legal_moves()
 
         if not legal_moves: 
-            return None 
+            return 'No legal moves available'
         
         # Optimize performance - random first move
         if len(legal_moves) == 9:  
-            return random.choice(legal_moves)
+            return str(random.choice(legal_moves))
 
         # Clear cache for each new move decision to prevent memory growth
         # While keeping it during the minimax recursion
@@ -61,7 +61,7 @@ class MinimaxAgent(Agent):
         if best_move is None and legal_moves:
             best_move = random.choice(legal_moves)
             
-        return best_move
+        return str(best_move)
     
     def minimax(self, game):
         """
@@ -126,13 +126,4 @@ class MinimaxAgent(Agent):
     
     def supports_batch(self) -> bool:
         """Minimax agent supports batch processing, though it's serial"""
-        return True
-    
-    def get_batch_moves(self, game_contexts):
-        """Process multiple games in batch"""
-        moves = []
-        for context in game_contexts:
-            game = context.get('game')
-            player_value = context.get('player_value')
-            moves.append(self.get_move(game, player_value))
-        return moves
+        return False

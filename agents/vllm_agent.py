@@ -2,7 +2,7 @@ import re
 import sys
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -22,8 +22,8 @@ class VLLMAgent(Agent):
         self.llm_engine = llm_engine
         self.sampling_params = sampling_params
         self.tokenizer = tokenizer
-        
-    def get_move(self, game, player_value) -> Any:
+    
+    def get_move(self, game, player_value) -> str:
         """
         Get a move from the LLM
         
@@ -32,69 +32,20 @@ class VLLMAgent(Agent):
             player_value: Agent's player value in the game
             
         Returns:
-            Move object (format depends on game implementation)
+            str: Raw LLM output string (unparsed)
         """
         prompt_text, legal_moves = self._prepare_prompt(game)
-        if not prompt_text or not legal_moves:
-            return None
+        if not prompt_text:
+            return "Error preparing prompt"
+        if not legal_moves:
+            return "No legal moves available"
             
         # Generate response from LLM
         outputs = self.llm_engine.generate([prompt_text], self.sampling_params, use_tqdm=False)
         raw_output = outputs[0].outputs[0].text
         
-        # Parse the move from the output - now using game's parse method
-        move = game.parse_move_from_output(raw_output, legal_moves)
-        return move
-    
-    def supports_batch(self) -> bool:
-        """vLLM agent supports batch processing"""
-        return True
-    
-    def get_batch_moves(self, game_contexts: List[Dict]) -> List[Any]:
-        """
-        Get moves for multiple games in batch
-        
-        Args:
-            game_contexts: List of dictionaries containing:
-                           - 'game': Game object
-                           - 'player_value': Agent's player value
-                           
-        Returns:
-            List of moves, one for each game context
-        """
-        prompts = []
-        legal_moves_list = []
-        valid_indices = []
-        game_list = []
-        
-        # Prepare prompts for all valid games
-        for i, context in enumerate(game_contexts):
-            game = context.get('game')
-            prompt_text, legal_moves = self._prepare_prompt(game)
-            if prompt_text and legal_moves:
-                prompts.append(prompt_text)
-                legal_moves_list.append(legal_moves)
-                valid_indices.append(i)
-                game_list.append(game)  # Store the game object for parsing
-        
-        # If no valid prompts, return None for all contexts
-        if not prompts:
-            return [None] * len(game_contexts)
-            
-        # Generate responses in batch
-        outputs = self.llm_engine.generate(prompts, self.sampling_params, use_tqdm=False)
-        
-        # Process the outputs and create result list
-        results = [None] * len(game_contexts)
-        for output_idx, output in enumerate(outputs):
-            raw_output = output.outputs[0].text
-            context_idx = valid_indices[output_idx]
-            legal_moves = legal_moves_list[output_idx]
-            game = game_list[output_idx]  # Get the corresponding game
-            move = game.parse_move_from_output(raw_output, legal_moves)  # Use game's parse method
-            results[context_idx] = move
-            
-        return results
+        # Return raw output without any parsing
+        return raw_output
     
     def _prepare_prompt(self, game):
         """

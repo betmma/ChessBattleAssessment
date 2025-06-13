@@ -16,7 +16,7 @@ from evaluation.evaluator import Evaluator
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Baseline Evaluation of Random vs Minimax Agents")
-    parser.add_argument("--num_games", type=int, default=500, help="Number of games to evaluate")
+    parser.add_argument("--num_games", type=int, default=5, help="Number of games to evaluate")
     parser.add_argument("--output_dir", type=str, help="Output directory for results")
     return parser.parse_args()
 

@@ -1,49 +1,45 @@
 from abc import ABC, abstractmethod
-from typing import List, Any, Optional, Dict, Union
+from typing import List, Dict, Any
 
 class Agent(ABC):
-    """Abstract base class for all agents. All AI and rule-based agents inherit from this."""
+    """Base abstract class for all agents."""
     
-    def __init__(self, name: str = "Agent"):
+    def __init__(self, name: str = "BaseAgent"):
         self.name = name
     
     @abstractmethod
-    def get_move(self, game, player_value: Any) -> Any:
+    def get_move(self, game, player_value) -> str:
         """
-        Determine the next move from the game state
+        Get a move from the agent
         
         Args:
             game: Game object
-            player_value: Agent's player identifier in the game
+            player_value: Agent's player value
             
         Returns:
-            Next move, format depends on game implementation
+            str: The chosen move as a string
         """
         pass
     
-    @abstractmethod
-    def supports_batch(self) -> bool:
-        """Whether this agent supports batch processing multiple games"""
-        pass
-    
-    def get_batch_moves(self, game_contexts: List[Dict]) -> List[Any]:
+    def get_batch_moves(self, game_contexts: List[Dict]) -> List[str]:
         """
-        Get moves for multiple game states in batch, defaults to serial processing
+        Get moves for multiple games in batch
         
         Args:
-            game_contexts: List of game state and context dictionaries, each containing:
+            game_contexts: List of dictionaries with:
                            - 'game': Game object
-                           - 'player_value': Agent's player identifier in that game
-                           - Other possible context needed
-        
+                           - 'player_value': Agent's player value
+                           
         Returns:
-            List of moves, corresponding to the input game contexts
+            List[str]: List of moves as strings
         """
-        if not self.supports_batch():
-            return [self.get_move(ctx.get('game'), ctx.get('player_value')) for ctx in game_contexts]
-        else:
-            # Batch implementation to be overridden in subclasses
-            raise NotImplementedError("Batch processing method should be implemented in subclasses that support batch")
-            
+        moves = []
+        for context in game_contexts:
+            game = context.get('game')
+            player_value = context.get('player_value')
+            move = self.get_move(game, player_value)
+            moves.append(move)
+        return moves
+    
     def __str__(self) -> str:
         return self.name
