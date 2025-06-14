@@ -1,10 +1,12 @@
 # ChessBattleAssessment
 
-A comprehensive evaluation framework for AI agents playing Chess-like Board Games (currently only TicTacToe), supporting multiple agent types including API-based models, local language models, and traditional algorithms.
+A comprehensive evaluation framework for AI agents playing Chess-like Board Games (currently TicTacToe and Connect 4), supporting multiple agent types including API-based models, local language models, and traditional algorithms.
 
 ## Features
 
 - **Multiple Agent Types**: Support for API agents, vLLM agents, Random agents, and Minimax agents
+- **Multiple Game Types**: TicTacToe and Connect 4 support
+- **Human vs Agent Mode**: Interactive gameplay against AI agents
 - **Flexible Evaluation**: Evaluate any agent against any other agent or multiple opponents
 - **Comprehensive Logging**: Detailed game logs and performance metrics
 - **Configurable Settings**: Customizable game parameters and evaluation settings
@@ -13,21 +15,37 @@ A comprehensive evaluation framework for AI agents playing Chess-like Board Game
 
 ```
 ChessBattleAssessment/
-├── agents/                 # Agent implementations
-│   ├── api_agent.py       # API-based agents (OpenAI, etc.)
-│   ├── vllm_agent.py      # Local vLLM model agents
-│   ├── random_agent.py    # Random move agent
-│   └── minimax_agent.py   # Minimax algorithm agent
-├── games/                 # Game implementations
-│   └── tictactoe.py       # TicTacToe game logic
-├── evaluation/            # Evaluation framework
-│   └── evaluator.py       # Agent evaluation system
-├── utils/                 # Utility modules
-│   └── model_utils.py     # Model loading and configuration
-├── config.py              # Configuration settings
-├── evaluate_two_agents.py # Two-agent battle evaluation
-└── README.md              # This file
+├── agents/                          # Agent implementations
+│   ├── api_agent.py                 # API-based agents (OpenAI, etc.)
+│   ├── vllm_agent.py                # Local vLLM model agents
+│   ├── random_agent.py              # Random move agent
+│   ├── minimax_agent_connect4.py    # Minimax algorithm agent for connect 4 game
+│   ├── minimax_agent_tictactoe.py   # Minimax algorithm agent for tictactoe game
+│   └── minimax_agent.py             # Minimax algorithm agent, route to above subagents
+├── games/                           # Game implementations
+│   ├── tictactoe.py                 # TicTacToe game logic
+│   └── connect4.py                  # Connect 4 game logic
+├── evaluation/                      # Evaluation framework
+│   └── evaluator.py                 # Agent evaluation system
+├── utils/                           # Utility modules
+│   └── model_utils.py               # Model loading and configuration
+├── config.py                        # Configuration settings
+├── evaluate_two_agents.py           # Two-agent battle evaluation
+├── human_vs_agent.py                # Human vs agent interactive mode
+└── README.md                        # This file
 ```
+
+## Game Types
+
+### 1. TicTacToe
+- Classic 3x3 grid game
+- First to get three in a row wins
+- Perfect play solvable
+
+### 2. Connect 4
+- 6x7 grid with gravity-based moves
+- First to get four in a row (horizontal, vertical, or diagonal) wins
+- More complex strategy than TicTacToe
 
 ## Agent Types
 
@@ -145,6 +163,19 @@ python evaluate_two_agents.py \
     --agent1 vllm --agent1_model_path /path/to/model \
     --agent2 random \
     --num_games 100
+```
+
+## Human vs Agent Mode
+
+To play against an AI agent:
+
+```bash
+python human_vs_agent.py \
+    --agent api \
+    --agent_model gpt-4 \
+    --agent_api_base_url https://api.openai.com/v1 \
+    --agent_api_key your_key \
+    --game tictactoe
 ```
 
 ## Configuration

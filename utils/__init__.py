@@ -8,6 +8,9 @@ try:
 except ImportError:
     ModelUtils = None
 
+from .create_agent import create_agent
+
 __all__ = [
     'ModelUtils'
+    'create_agent'
 ]
