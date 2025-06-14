@@ -13,7 +13,7 @@ class ModelUtils:
     """Utilities for initializing models and tokenizers"""
     
     @staticmethod
-    def initialize_vllm_model(model_path, tensor_parallel_size=1):
+    def initialize_vllm_model(model_path, tensor_parallel_size=1, max_num_seqs=4096):
         """
         Initialize vLLM model and tokenizer
         
@@ -40,6 +40,7 @@ class ModelUtils:
             tokenizer=model_path,
             tensor_parallel_size=tensor_parallel_size,
             trust_remote_code=True,
+            max_num_seqs=max_num_seqs
         )
         
         # Create default sampling parameters

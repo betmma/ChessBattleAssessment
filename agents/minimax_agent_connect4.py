@@ -2,21 +2,64 @@ from typing import List, Tuple, Optional, Any
 import random
 import sys
 import os
+import psutil
+from collections import OrderedDict
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agents import Agent
 
+class LRUCache:
+    """LRU Cache implementation with automatic memory-based sizing"""
+    
+    def __init__(self, max_size: int):
+        self.max_size = max_size
+        self.cache = OrderedDict()
+    
+    def get(self, key):
+        if key in self.cache:
+            # Move to end (most recently used)
+            self.cache.move_to_end(key)
+            return self.cache[key]
+        return None
+    
+    def put(self, key, value):
+        if key in self.cache:
+            # Update existing key
+            self.cache.move_to_end(key)
+        else:
+            # Add new key
+            if len(self.cache) >= self.max_size:
+                # Remove least recently used item
+                self.cache.popitem(last=False)
+        self.cache[key] = value
+    
+    def clear(self):
+        self.cache.clear()
+
 class MinimaxAgentConnect4(Agent):
     """Agent using Minimax algorithm with alpha-beta pruning"""
     
     def __init__(self, name: str = "MinimaxAgent", max_depth: int = 4):
         super().__init__(name)
-        # Cache for storing evaluated positions
-        self.score_cache = {}
+        # Calculate cache size based on available memory
+        cache_size = self._calculate_cache_size()
+        self.score_cache = LRUCache(cache_size)
         # Maximum search depth for Connect4
         self.max_depth = max_depth
+    
+    def _calculate_cache_size(self) -> int:
+        """Calculate optimal cache size based on available memory"""
+        try:
+            # Get available memory in bytes
+            available_memory = psutil.virtual_memory().available
+            # Use 5% of available memory for cache, assuming ~100 bytes per cache entry
+            cache_size = min(max(1000, available_memory // (100 * 20)), 50000)
+            return cache_size
+        except:
+            # Fallback to conservative size if psutil fails
+            return 10000
     
     def get_move(self, game) -> str:
         """
@@ -35,8 +78,7 @@ class MinimaxAgentConnect4(Agent):
         if not legal_moves: 
             return 'No legal moves available'
 
-        # Clear cache for each new move decision to prevent memory growth
-        self.score_cache = {}
+        # LRU cache automatically manages memory, no need to clear
 
         if player_value == 1:  # X (maximizing player)
             best_score = -float('inf')
@@ -105,8 +147,9 @@ class MinimaxAgentConnect4(Agent):
         state_key = self._get_state_key(game, depth)
         
         # Check if this state has already been evaluated
-        if state_key in self.score_cache:
-            return self.score_cache[state_key]
+        cached_result = self.score_cache.get(state_key)
+        if cached_result is not None:
+            return cached_result
         
         winner = game.check_winner()
         if winner is not None:
@@ -118,13 +161,13 @@ class MinimaxAgentConnect4(Agent):
                 score = 0                # Draw
             
             # Cache the result
-            self.score_cache[state_key] = score
+            self.score_cache.put(state_key, score)
             return score
         
         # If we've reached maximum depth, use heuristic evaluation
         if depth >= self.max_depth:
             score = self._evaluate_position(game)
-            self.score_cache[state_key] = score
+            self.score_cache.put(state_key, score)
             return score
         
         if maximizing_player:  # X's turn, maximizing player
@@ -141,7 +184,7 @@ class MinimaxAgentConnect4(Agent):
                     break  # Beta cutoff
             
             # Cache the result
-            self.score_cache[state_key] = max_eval
+            self.score_cache.put(state_key, max_eval)
             return max_eval
         else:  # O's turn, minimizing player
             min_eval = float('inf')
@@ -157,7 +200,7 @@ class MinimaxAgentConnect4(Agent):
                     break  # Alpha cutoff
             
             # Cache the result
-            self.score_cache[state_key] = min_eval
+            self.score_cache.put(state_key, min_eval)
             return min_eval
     
     def _evaluate_position(self, game):
@@ -245,7 +288,4 @@ class MinimaxAgentConnect4(Agent):
         board = [cell for row in board for cell in row]
         board_tuple = tuple(board)
         return (board_tuple, game.current_player, depth)
-    
-    def supports_batch(self) -> bool:
-        """Minimax agent supports batch processing, though it's serial"""
-        return False
+

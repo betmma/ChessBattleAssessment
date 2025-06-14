@@ -35,11 +35,9 @@ class VLLMAgent(Agent):
         Returns:
             str: Raw LLM output string (unparsed)
         """
-        prompt_text, legal_moves = self._prepare_prompt(game)
+        prompt_text = self._prepare_prompt(game)
         if not prompt_text:
             return "Error preparing prompt"
-        if not legal_moves:
-            return "No legal moves available"
             
         # Generate response from LLM
         outputs = self.llm_engine.generate([prompt_text], self.sampling_params, use_tqdm=False)
@@ -47,6 +45,32 @@ class VLLMAgent(Agent):
         
         # Return raw output without any parsing
         return raw_output
+    
+    def get_batch_moves(self, game_contexts: List[Dict]) -> List[str]:
+        """
+        Get moves for a batch of game contexts
+        
+        Args:
+            game_contexts: List of game context dictionaries
+            
+        Returns:
+            List[str]: Raw LLM outputs for each game context
+        """
+        prompts = []
+        
+        for game in game_contexts:
+            prompt_text = self._prepare_prompt(game)
+            if not prompt_text:
+                prompts.append("Error preparing prompt")
+            else:
+                prompts.append(prompt_text)
+        
+        # Generate responses from LLM
+        outputs = self.llm_engine.generate(prompts, self.sampling_params, use_tqdm=False)
+        
+        # Return raw outputs without any parsing
+        return [output.outputs[0].text for output in outputs]
+        
     
     def _prepare_prompt(self, game:Game):
         """
@@ -60,17 +84,13 @@ class VLLMAgent(Agent):
         """
         try:
             messages = game.get_chat_history_for_llm(self)
-            legal_moves = game.get_legal_moves()
-            
-            if not legal_moves:
-                return None, []
                 
             # Use tokenizer to format chat messages
             prompt_text = self.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.enable_thinking
             )
             
-            return prompt_text, legal_moves
+            return prompt_text
         except Exception as e:
             logging.error(f"Error preparing prompt: {e}")
-            return None, []
+            return None

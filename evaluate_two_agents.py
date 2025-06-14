@@ -175,7 +175,7 @@ def main():
     # Run evaluation
     logger.info(f"Starting battle: {agent1.name} vs {agent2.name}")
     results = evaluator.evaluate_agent_vs_agent(
-        agent1, agent2, TicTacToeGame, config.NUM_EVAL_GAMES
+        agent1, agent2, Connect4Game, config.NUM_EVAL_GAMES
     )
     
     # Save results
