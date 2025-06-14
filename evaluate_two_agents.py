@@ -8,11 +8,8 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from config import Config, setup_logging
-from games.tictactoe import TicTacToeGame
-from agents.random_agent import RandomAgent
-from agents.minimax_agent import MinimaxAgent
-from agents.api_agent import APIAgent
-from agents.vllm_agent import VLLMAgent
+from games import TicTacToeGame, Connect4Game
+from agents import RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
 from evaluation.evaluator import Evaluator
 from utils.model_utils import ModelUtils
 
@@ -120,7 +117,7 @@ def create_agent(agent_type, agent_name, **kwargs):
         return MinimaxAgent(name=agent_name)
     elif agent_type == "vllm":
         return create_vllm_agent(
-            kwargs.get('model_path', '/mnt/data/user/zhao_jun/mou_yu_rong/openrlhf/chessBattleAdvanced/TicTacToe/TicTacToe/sft2_lr1e-5_minimax_opp_no_kl/model_episode_5000_remove_value_head'),
+            kwargs.get('model_path'),
             agent_name
         )
     else:

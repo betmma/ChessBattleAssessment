@@ -15,11 +15,10 @@ class TicTacToeGame(Game):
     """Tic-Tac-Toe game implementation"""
     
     def __init__(self):
+        super().__init__()
         self.board = [0] * 9  # 0: empty, 1: Player X, -1: Player O
-        self.current_player = 1  # Player X starts
         self.player_X_symbol = 'X'
         self.player_O_symbol = 'O'
-        self.empty_symbol = '.'
         self._game_over_forced_forfeit = False  # For forcing game end in evaluation
         self.prompt_template = None  # For dynamic prompt updates
         self._setup_default_prompt()

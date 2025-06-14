@@ -1,128 +1,62 @@
-import copy
-import random
 import sys
 import os
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from agents.agent import Agent
+from agents.minimax_agent_tictactoe import MinimaxAgentTicTacToe
+from agents.minimax_agent_connect4 import MinimaxAgentConnect4
 
 class MinimaxAgent(Agent):
-    """Agent using Minimax algorithm"""
+    """
+    Universal Minimax agent that routes to specific game implementations
+    """
     
-    def __init__(self, name: str = "MinimaxAgent"):
+    def __init__(self, name: str = "MinimaxAgent", depth: int = 4):
         super().__init__(name)
-        # Cache for storing evaluated positions
-        self.score_cache = {}
+        self.depth = depth
+        self.tictactoe_agent = MinimaxAgentTicTacToe(f"{name}-TicTacToe")
+        self.connect4_agent = MinimaxAgentConnect4(f"{name}-Connect4", max_depth=depth)
     
     def get_move(self, game) -> str:
         """
-        Get best move using Minimax algorithm
+        Get a move using appropriate minimax implementation based on game type
         
         Args:
             game: Game object
             
         Returns:
-            str: Best move as string
+            str: The chosen move as a string
         """
-        player_value = game.get_current_player()
-        best_score = -float('inf') if player_value == 1 else float('inf')
-        best_move = None
-        legal_moves = game.get_legal_moves()
-
-        if not legal_moves: 
-            return 'No legal moves available'
+        # Lazy import to avoid circular import
+        from games import TicTacToeGame, Connect4Game
         
-        # Optimize performance - random first move
-        if len(legal_moves) == 9:  
-            return str(random.choice(legal_moves))
-
-        # Clear cache for each new move decision to prevent memory growth
-        # While keeping it during the minimax recursion
-        self.score_cache = {}
-
-        for move in legal_moves:
-            temp_game = game.clone()
-            temp_game.make_move(move)  # Player switches in temp_game
-            
-            # Score from X (value 1) perspective
-            score = self.minimax(temp_game)
-            
-            if player_value == 1:  # X (maximizing player)
-                if score > best_score:
-                    best_score = score
-                    best_move = move
-            else:  # O (minimizing player)
-                if score < best_score:
-                    best_score = score
-                    best_move = move
-        
-        # If all moves have same score, choose randomly
-        if best_move is None and legal_moves:
-            best_move = random.choice(legal_moves)
-            
-        return str(best_move)
+        if isinstance(game, TicTacToeGame):
+            return self.tictactoe_agent.get_move(game)
+        elif isinstance(game, Connect4Game):
+            return self.connect4_agent.get_move(game)
+        else:
+            raise ValueError(f"Unsupported game type: {type(game)}")
     
-    def minimax(self, game):
+    def set_depth(self, depth: int):
         """
-        Recursive implementation of Minimax algorithm with caching
-        
-        Returns:
-            Score from X player's perspective
-        """
-        # Create a hashable representation of the game state
-        state_key = self._get_state_key(game)
-        
-        # Check if this state has already been evaluated
-        if state_key in self.score_cache:
-            return self.score_cache[state_key]
-        
-        winner = game.check_winner()
-        if winner is not None:
-            if winner == 1: 
-                score = 10     # X wins
-            elif winner == -1: 
-                score = -10    # O wins
-            else:
-                score = 0      # Draw
-            
-            # Cache the result
-            self.score_cache[state_key] = score
-            return score
-        
-        current_player = game.get_current_player()
-        if current_player == 1:  # X's turn, X maximizes score
-            best_score = -float('inf')
-            for move in game.get_legal_moves():
-                temp_game = game.clone()
-                temp_game.make_move(move)
-                score = self.minimax(temp_game)
-                best_score = max(score, best_score)
-        else:  # O's turn, O minimizes X's score
-            best_score = float('inf')
-            for move in game.get_legal_moves():
-                temp_game = game.clone()
-                temp_game.make_move(move)
-                score = self.minimax(temp_game)
-                best_score = min(score, best_score)
-        
-        # Cache the result
-        self.score_cache[state_key] = best_score
-        return best_score
-    
-    def _get_state_key(self, game):
-        """
-        Create a hashable representation of the TicTacToe game state
+        Set the search depth for both agents
         
         Args:
-            game: TicTacToe game object
-            
-        Returns:
-            A tuple representing the board state and current player
+            depth: Maximum search depth
         """
-        # For TicTacToe, we can use a tuple of the board array and current player
-        board_tuple = tuple(game.board)
-        return (board_tuple, game.current_player)
+        self.depth = depth
+        self.connect4_agent.max_depth = depth
+        # TicTacToe doesn't use depth limit as it can solve completely
+    
+    def get_supported_games(self):
+        """
+        Get list of supported game types
+        
+        Returns:
+            List[str]: List of supported game types
+        """
+        return ['tictactoe', 'connect4']
     
     def supports_batch(self) -> bool:
         """Minimax agent supports batch processing, though it's serial"""

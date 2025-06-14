@@ -15,14 +15,12 @@ class Connect4Game(Game):
     """Connect 4 game implementation"""
     
     def __init__(self):
+        super().__init__()
         self.rows = 6
         self.cols = 7
         self.board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
-        self.current_player = 1  # Player 1 starts (Red)
         self.player_1_symbol = 'R'  # Red
         self.player_2_symbol = 'Y'  # Yellow
-        self.empty_symbol = '.'
-        self._game_over_forced_forfeit = False
         self._setup_default_prompt()
         
     def _setup_default_prompt(self):

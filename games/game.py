@@ -1,9 +1,19 @@
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional, Any, Dict
-from agents.agent import Agent
 
 class Game(ABC):
     """Base abstract class for all games. All game implementations must inherit from this."""
+    
+    def __init__(self):
+        """Initialize common game attributes"""
+        self.current_player = 1  # Current player identifier
+        self._game_over_forced_forfeit = False  # For forcing game end in evaluation
+        self.system_prompt = None  # System prompt for LLM
+        self.user_prompt_template = None  # User prompt template for LLM
+        self.system_prompt_no_thinking = None  # System prompt without thinking requirement
+        self.user_prompt_template_no_thinking = None  # User prompt template without thinking
+        self.empty_symbol = '.'  # Symbol for empty positions
+        self.name = self.__class__.__name__  # Default game name based on class name
     
     @abstractmethod
     def get_legal_moves(self) -> List[Any]:
@@ -36,7 +46,7 @@ class Game(ABC):
         pass
     
     @abstractmethod
-    def get_chat_history_for_llm(self, llm: Agent) -> List[Dict[str, str]]:
+    def get_chat_history_for_llm(self, llm) -> List[Dict[str, str]]:
         """Get the chat history to send to llm, including system prompt and game state"""
         pass
     
