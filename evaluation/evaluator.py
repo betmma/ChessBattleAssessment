@@ -337,7 +337,7 @@ class Evaluator:
         self.retry_limit = retry_limit
         # self.results and self.game_logs are now managed by EvaluationLogger
         
-    def evaluate_agent_vs_agent(self, agent1, agent2, game_class, num_games: Optional[int] = None):
+    def evaluate_agent_vs_agent(self, agent1, agent2, game_class, num_games: Optional[int] = None, no_logging: bool = False) -> Dict:
         """
         Evaluate one agent against another on a specific game.
         Orchestrates GameRunner and EvaluationLogger.
@@ -402,9 +402,10 @@ class Evaluator:
                     game_state=gs
                 )
         
-        logger.save_detailed_logs_to_file()
         final_summary_results = logger.generate_final_summary(num_games_to_run)
-        logger.save_summary_report_to_file(final_summary_results)
+        if not no_logging:
+            logger.save_detailed_logs_to_file()
+            logger.save_summary_report_to_file(final_summary_results)
         
         logging.info(f"Evaluation finished for {agent1.name} vs {agent2.name}.")
         return final_summary_results

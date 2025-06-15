@@ -2,18 +2,18 @@ import os
 import sys
 import logging
 import argparse
-from typing import Optional
+from typing import Optional, List, Dict # Added List, Dict
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from config import Config, setup_logging
 from games import Game, TicTacToeGame, Connect4Game
-from agents import RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
+from agents import Agent, RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
 from utils import create_agent
+from evaluation.evaluator import Evaluator # Added import
 
-
-class HumanPlayer:
+class HumanPlayer(Agent):
     """Human player that gets input from console"""
     
     def __init__(self, name="Human"):
@@ -22,6 +22,10 @@ class HumanPlayer:
     def get_move(self, game):
         """Get move from human player via console input"""
         legal_moves = game.get_legal_moves()
+        
+        # Print current board state for the human player
+        print("\nCurrent Board State:")
+        print(game.get_state_representation())
         
         print(f"\n{self.name}, it's your turn!")
         print(f"Legal moves: {legal_moves}")
@@ -34,7 +38,7 @@ class HumanPlayer:
                 parsed_move = game.parse_move_from_output(move_input, legal_moves)
                 
                 if parsed_move is not None and parsed_move in legal_moves:
-                    return str(parsed_move)
+                    return str(parsed_move) # Evaluator expects string representation
                 else:
                     print(f"Invalid move '{move_input}'. Please enter a valid move from: {legal_moves}")
                     
@@ -77,79 +81,70 @@ def parse_args():
     return parser.parse_args()
 
 
-def play_game(game_class, human_player, ai_agent, human_first=False):
-    """Play a single game between human and AI"""
-    game:Game = game_class()
+def play_game(game_class, human_player: HumanPlayer, ai_agent: Agent, human_first: bool, config: Config):
+    """Play a single game between human and AI using Evaluator"""
     
-    # Determine player order
+    evaluator = Evaluator(config=config, retry_limit=3) 
+
+    # Determine agent order for Evaluator.
+    # Note: Evaluator assigns X/O (player 1/2) randomly per game.
+    # 'human_first' here means human is agent1_eval if true.
     if human_first:
-        player1, player2 = human_player, ai_agent
-        print(f"\n{human_player.name} plays first (X), {ai_agent.name} plays second (O)")
+        agent1_eval, agent2_eval = human_player, ai_agent
+        print(f"\\n{human_player.name} (as agent1) will play against {ai_agent.name} (as agent2).")
     else:
-        player1, player2 = ai_agent, human_player
-        print(f"\n{ai_agent.name} plays first (X), {human_player.name} plays second (O)")
+        agent1_eval, agent2_eval = ai_agent, human_player
+        print(f"\\n{ai_agent.name} (as agent1) will play against {human_player.name} (as agent2).")
     
-    current_player = player1
-    move_count = 0
+    print("Evaluator will assign roles (X/O) and start the game...")
+    # HumanPlayer.get_move will be called by the Evaluator's GameRunner when it's human's turn.
     
-    while not game.is_game_over():
-        print(f"\n--- Move {move_count + 1} ---")
-        print(game.get_state_representation())
+    try:
+        results = evaluator.evaluate_agent_vs_agent(
+            agent1_eval, 
+            agent2_eval, 
+            game_class, 
+            num_games=1, # Play a single game
+            no_logging=True, # No need for detailed logging in interactive mode
+        )
         
-        try:
-            if isinstance(current_player, HumanPlayer):
-                move = current_player.get_move(game)
-            else:
-                print(f"\n{current_player.name} is thinking...")
-                move = current_player.get_move(game)
-                print(f"{current_player.name} chooses: {move}")
-            
-            # Parse and apply move
-            legal_moves = game.get_legal_moves()
-            parsed_move = game.parse_move_from_output(str(move), legal_moves)
-            
-            if parsed_move is None or parsed_move not in legal_moves:
-                print(f"Invalid move from {current_player.name}: {move}")
-                if isinstance(current_player, HumanPlayer):
-                    continue
-                else:
-                    print("AI made invalid move - game ends")
-                    break
-            
-            # Apply the move
-            success = game.make_move(parsed_move)
-            if not success:
-                print(f"Failed to apply move: {move}")
-                break
-            
-            # Switch players
-            current_player = player2 if current_player == player1 else player1
-            move_count += 1
-            
-        except KeyboardInterrupt:
-            print("\nGame interrupted by user.")
+        print(f"\\n--- GAME OVER (Evaluator) ---")
+        # Final board state is logged by Evaluator. HumanPlayer shows board during their turns.
+
+        if results['total_games'] == 0:
+            print("No game was played or recorded by evaluator.")
             return None
-        except Exception as e:
-            print(f"Error during game: {e}")
-            return None
-    
-    # Game over - show final state
-    print(f"\n--- GAME OVER ---")
-    print(game.get_state_representation())
-    
-    # Determine winner
-    winner = game.check_winner()
-    if winner is None:
-        print("It's a draw!")
-        return "draw"
-    elif winner == "X":
-        winner_name = player1.name
-        print(f"{winner_name} wins!")
-        return player1
-    else:  # winner == "O"
-        winner_name = player2.name
-        print(f"{winner_name} wins!")
-        return player2
+
+        # Determine winner based on agent objects passed to evaluator
+        if results['wins_agent1'] == 1:
+            winner_name = agent1_eval.name
+            print(f"{winner_name} wins!")
+            return agent1_eval 
+        elif results['wins_agent2'] == 1:
+            winner_name = agent2_eval.name
+            print(f"{winner_name} wins!")
+            return agent2_eval
+        elif results['draws'] == 1:
+            print("It's a draw!")
+            return "draw"
+        elif results['forfeits_agent1'] == 1:
+            forfeited_name = agent1_eval.name
+            winner_name = agent2_eval.name
+            print(f"{forfeited_name} forfeited. {winner_name} wins!")
+            return agent2_eval
+        elif results['forfeits_agent2'] == 1:
+            forfeited_name = agent2_eval.name
+            winner_name = agent1_eval.name
+            print(f"{forfeited_name} forfeited. {winner_name} wins!")
+            return agent1_eval
+
+    except KeyboardInterrupt:
+        print("\\nGame interrupted by user during evaluation.")
+        sys.exit(0) # Exit if interrupted during eval
+    except Exception as e:
+        logging.error(f"Error during game evaluation: {e}", exc_info=True)
+        print(f"An error occurred during evaluation: {e}")
+        return None
 
 
 def main():
@@ -157,6 +152,8 @@ def main():
     
     # Initialize config and logging
     config = Config()
+    config.MAX_CONCURRENT_GAMES = 1
+    
     logger = setup_logging(config)
     
     print("=" * 50)
@@ -201,11 +198,11 @@ def main():
     game_number = 1
     
     while True:
-        print(f"\n{'='*20} GAME {game_number} {'='*20}")
+        print(f"\\n{'='*20} GAME {game_number} {'='*20}")
         
         try:
-            # Play one game
-            result = play_game(game_class, human_player, ai_agent, args.human_first)
+            # Play one game using the new play_game function
+            result = play_game(game_class, human_player, ai_agent, args.human_first, config) # Pass config
             
             if result == human_player:
                 wins_human += 1
