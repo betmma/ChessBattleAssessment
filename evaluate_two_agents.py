@@ -113,9 +113,6 @@ def main():
         agent1, agent2, Connect4Game, config.NUM_EVAL_GAMES
     )
     
-    # Save results
-    evaluator.save_results([results])
-    
     # Print summary
     logger.info("=" * 50)
     logger.info("BATTLE RESULTS SUMMARY")

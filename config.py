@@ -7,7 +7,8 @@ class Config:
     VLLM_TENSOR_PARALLEL_SIZE = 1
     VLLM_MAX_NUM_SEQS = 4096
     VLLM_MAX_MODEL_LEN = 2048  # Max length of the model context
-    VLLM_MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
+    
+    MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
     
     # Generation Settings
     MAX_PROMPT_LENGTH = 512  # Max length for tokenizer context for prompts
