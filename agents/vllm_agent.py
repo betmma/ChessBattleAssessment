@@ -59,6 +59,7 @@ class VLLMAgent(Agent):
         prompts = []
         
         for game in game_contexts:
+            game=game.get('game')
             prompt_text = self._prepare_prompt(game)
             if not prompt_text:
                 prompts.append("Error preparing prompt")

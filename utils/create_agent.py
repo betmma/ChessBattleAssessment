@@ -50,7 +50,7 @@ def create_vllm_agent(model_path, agent_name):
             max_tokens=1024
         )
         
-        return VLLMAgent(llm_engine, sampling_params, tokenizer, name=agent_name, enable_thinking=False)
+        return VLLMAgent(llm_engine, sampling_params, tokenizer, name=agent_name, enable_thinking=True)
     except Exception as e:
         raise RuntimeError(f"Failed to initialize {agent_name}: {e}")
 
@@ -68,9 +68,12 @@ def create_agent(agent_type, agent_name, **kwargs):
     elif agent_type == "minimax":
         return MinimaxAgent(name=agent_name)
     elif agent_type == "vllm":
-        return create_vllm_agent(
+        vllmAgent=create_vllm_agent(
             kwargs.get('model_path'),
             agent_name
         )
+        if kwargs.get('enable_thinking')== False:
+            vllmAgent.enable_thinking = False
+        return vllmAgent
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")

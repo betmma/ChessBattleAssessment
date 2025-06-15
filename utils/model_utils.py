@@ -40,7 +40,8 @@ class ModelUtils:
             tokenizer=model_path,
             tensor_parallel_size=tensor_parallel_size,
             trust_remote_code=True,
-            max_num_seqs=max_num_seqs
+            max_num_seqs=max_num_seqs,
+            max_model_len=2048
         )
         
         # Create default sampling parameters
