@@ -3,22 +3,18 @@ import logging
 from datetime import datetime
 
 class Config:
-    # Model Settings
-    MODEL_PATH = "/mnt/data/user/zhao_jun/mou_yu_rong/openrlhf/chessBattleAdvanced/Qwen3-8B"
-    
     # VLLM Settings
     VLLM_TENSOR_PARALLEL_SIZE = 1
+    VLLM_MAX_NUM_SEQS = 4096
+    VLLM_MAX_MODEL_LEN = 2048  # Max length of the model context
     VLLM_MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
     
     # Generation Settings
     MAX_PROMPT_LENGTH = 512  # Max length for tokenizer context for prompts
     MAX_GENERATION_LENGTH = 256  # Max new tokens for LLM to generate for a move
-    DO_SAMPLE_GENERATION = True
     TEMPERATURE = 0.1
     TOP_P = 0.95
-    
-    # Evaluation Settings
-    NUM_EVAL_GAMES = 500  # Number of games per opponent type
+    LOCAL_ENABLE_THINKING = True  # Enable thinking for local agents
     
     # Logging Settings
     LOG_LEVEL = logging.INFO

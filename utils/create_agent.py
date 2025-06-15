@@ -1,5 +1,4 @@
 from agents import RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
-from utils.model_utils import ModelUtils
 
 try:
     from openai import OpenAI
@@ -8,7 +7,17 @@ except ImportError:
     print("WARNING: OpenAI Python package not installed. Install with 'pip install openai httpx'")
     OpenAI = None
     httpx = None
-    
+import os
+import logging
+import torch
+from transformers import AutoTokenizer
+try:
+    from vllm import LLM, SamplingParams
+except ImportError:
+    logging.warning("vLLM not installed. To use vLLM backend, please install with 'pip install vllm'")
+    LLM, SamplingParams = None, None
+from config import Config
+
 def create_api_agent(model, api_base_url, api_key, agent_name):
     """Create an API agent with the given configuration"""
     if OpenAI is None or httpx is None:
@@ -38,19 +47,29 @@ def create_api_agent(model, api_base_url, api_key, agent_name):
 def create_vllm_agent(model_path, agent_name):
     """Create a vLLM agent with the given configuration"""
     try:
-        llm_engine, sampling_params, tokenizer = ModelUtils.initialize_vllm_model(
-            model_path, 1
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            
+        # Initialize vLLM engine
+        llm_engine = LLM(
+            model=model_path,
+            tokenizer=model_path,
+            tensor_parallel_size=Config.VLLM_TENSOR_PARALLEL_SIZE,
+            trust_remote_code=True,
+            max_num_seqs=Config.VLLM_MAX_NUM_SEQS,
+            max_model_len=Config.VLLM_MAX_MODEL_LEN
         )
         
-        # Update sampling parameters
-        sampling_params = ModelUtils.update_sampling_params(
-            sampling_params,
-            temperature=0.7,
-            top_p=0.95,
-            max_tokens=1024
+        # Create default sampling parameters
+        sampling_params = SamplingParams(
+            temperature=Config.TEMPERATURE,
+            top_p=Config.TOP_P,
+            max_tokens=Config.MAX_GENERATION_LENGTH,
+            stop_token_ids=[tokenizer.eos_token_id] if tokenizer.eos_token_id else []
         )
         
-        return VLLMAgent(llm_engine, sampling_params, tokenizer, name=agent_name, enable_thinking=True)
+        return VLLMAgent(llm_engine, sampling_params, tokenizer, name=agent_name, enable_thinking=Config.LOCAL_ENABLE_THINKING)
     except Exception as e:
         raise RuntimeError(f"Failed to initialize {agent_name}: {e}")
 
