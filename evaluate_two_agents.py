@@ -38,6 +38,8 @@ def parse_args():
     parser.add_argument("--agent1_model_path", type=str, 
                         default='Qwen/Qwen3-8B',
                         help="Model path for agent1 (only used if agent1 is 'vllm')")
+    parser.add_argument("--agent1_random_chance", type=float, default=0.0,
+                        help="Chance of agent1 making a random move (only used if agent1 is 'minimax')")
     
     # Agent 2 configuration
     parser.add_argument("--agent2", type=str, required=True, 
@@ -52,6 +54,8 @@ def parse_args():
     parser.add_argument("--agent2_model_path", type=str, 
                         default='Qwen/Qwen3-8B',
                         help="Model path for agent2 (only used if agent2 is 'vllm')")
+    parser.add_argument("--agent2_random_chance", type=float, default=0.0,
+                        help="Chance of agent2 making a random move (only used if agent2 is 'minimax')")
     
     parser.add_argument("--output_dir", type=str, help="Output directory for results")
     
@@ -78,11 +82,11 @@ def main():
     try:
         agent1 = create_agent(
             args.agent1, 
-            f"Agent1-{args.agent1}",
             model=args.agent1_model,
             api_base_url=args.agent1_api_base_url,
             api_key=args.agent1_api_key,
-            model_path=args.agent1_model_path
+            model_path=args.agent1_model_path,
+            random_chance=args.agent1_random_chance
         )
         logger.info(f"Successfully initialized Agent1: {agent1.name}")
     except Exception as e:
@@ -93,11 +97,11 @@ def main():
     try:
         agent2 = create_agent(
             args.agent2, 
-            f"Agent2-{args.agent2}",
             model=args.agent2_model,
             api_base_url=args.agent2_api_base_url,
             api_key=args.agent2_api_key,
-            model_path=args.agent2_model_path
+            model_path=args.agent2_model_path,
+            random_chance=args.agent2_random_chance
         )
         logger.info(f"Successfully initialized Agent2: {agent2.name}")
     except Exception as e:

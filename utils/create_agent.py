@@ -73,26 +73,26 @@ def create_vllm_agent(model_path, agent_name):
     except Exception as e:
         raise RuntimeError(f"Failed to initialize {agent_name}: {e}")
 
-def create_agent(agent_type, agent_name, **kwargs):
+def create_agent(agent_type, agent_name=None, **kwargs):
     """Factory function to create agents based on type"""
     if agent_type == "api":
-        return create_api_agent(
+        agent = create_api_agent(
             kwargs.get('model', 'gpt-4-0125-preview'),
             kwargs.get('api_base_url'),
-            kwargs.get('api_key'),
-            agent_name
+            kwargs.get('api_key')
         )
     elif agent_type == "random":
-        return RandomAgent(name=agent_name)
+        agent = RandomAgent()
     elif agent_type == "minimax":
-        return MinimaxAgent(name=agent_name)
+        agent = MinimaxAgent(random_chance=kwargs.get('random_chance', 0.0))
     elif agent_type == "vllm":
-        vllmAgent=create_vllm_agent(
+        agent=create_vllm_agent(
             kwargs.get('model_path'),
-            agent_name
         )
         if kwargs.get('enable_thinking')== False:
-            vllmAgent.enable_thinking = False
-        return vllmAgent
+            agent.enable_thinking = False
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
+    if agent_name:
+        agent.name = agent_name
+    return agent
