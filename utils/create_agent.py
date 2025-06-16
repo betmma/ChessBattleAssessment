@@ -18,7 +18,7 @@ except ImportError:
     LLM, SamplingParams = None, None
 from config import Config
 
-def create_api_agent(model, api_base_url, api_key, agent_name):
+def create_api_agent(model, api_base_url, api_key):
     """Create an API agent with the given configuration"""
     if OpenAI is None or httpx is None:
         raise ImportError("OpenAI and httpx packages are required for API agents")
@@ -39,12 +39,11 @@ def create_api_agent(model, api_base_url, api_key, agent_name):
         return APIAgent(
             api_client=client, 
             model=model,
-            name=f"{agent_name}-{model}"
         )
     except Exception as e:
-        raise RuntimeError(f"Failed to initialize {agent_name}: {e}")
+        raise RuntimeError(f"Failed to initialize api {model}: {e}")
 
-def create_vllm_agent(model_path, agent_name):
+def create_vllm_agent(model_path):
     """Create a vLLM agent with the given configuration"""
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -69,9 +68,9 @@ def create_vllm_agent(model_path, agent_name):
             stop_token_ids=[tokenizer.eos_token_id] if tokenizer.eos_token_id else []
         )
         
-        return VLLMAgent(llm_engine, sampling_params, tokenizer, name=agent_name, enable_thinking=Config.LOCAL_ENABLE_THINKING)
+        return VLLMAgent(llm_engine, sampling_params, tokenizer, enable_thinking=Config.LOCAL_ENABLE_THINKING)
     except Exception as e:
-        raise RuntimeError(f"Failed to initialize {agent_name}: {e}")
+        raise RuntimeError(f"Failed to initialize vllm {model_path}: {e}")
 
 def create_agent(agent_type, agent_name=None, **kwargs):
     """Factory function to create agents based on type"""

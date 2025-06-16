@@ -20,7 +20,7 @@ except ImportError:
 class APIAgent(Agent):
     """Agent using external API services like OpenAI"""
     
-    def __init__(self, api_client=None, model="gpt-4-0125-preview", api_base_url=None, api_key=None, name="APIAgent"):
+    def __init__(self, api_client=None, model="gpt-4-0125-preview", api_base_url=None, api_key=None, name="Default"):
         """
         Initialize an APIAgent
         
@@ -33,6 +33,9 @@ class APIAgent(Agent):
         """
         super().__init__(name)
         self.model = model
+        
+        if name=="Default":
+            self.name = f"API Agent ({model})"
         
         if api_client is not None:
             self.client = api_client
