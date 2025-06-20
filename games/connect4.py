@@ -27,16 +27,14 @@ class Connect4Game(Game):
         """Set default prompt template"""
         self.system_prompt = (
             "You are an expert Connect 4 player. Your task is to choose the best column to drop your piece. "
-            "First, think *briefly and concisely* about the current board state inside a `<think>` block. Your thinking should be a few sentences at most. "
+            "Your thinking should be a few sentences at most. "
             "After your thinking block, you MUST provide your chosen column number (0-6), enclosed in square brackets. "
-            "Your entire response should follow this format: `<think>Your reasoning here...</think>[column_number]`. "
-            "Do not add any other text outside this structure."
         )
         self.user_prompt_template = (
             "{board_representation}\n"
             "You are player '{player_symbol}'.\n"
             "Your available legal moves (columns): [{legal_moves_str}]\n"
-            "Provide your thinking and final move in the specified format: `<think>...</think>[column_number]`"
+            "Provide your thinking and final move in the specified format: `[column_number]`"
         )
         self.system_prompt_no_thinking = (
             "You are playing Connect 4. Your task is to select the BEST column to drop your piece from the available legal moves. "

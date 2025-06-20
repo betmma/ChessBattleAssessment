@@ -56,8 +56,10 @@ def create_vllm_agent(model_path):
             tokenizer=model_path,
             tensor_parallel_size=Config.VLLM_TENSOR_PARALLEL_SIZE,
             trust_remote_code=True,
+            max_num_batched_tokens=Config.VLLM_MAX_NUM_BATCHED_TOKENS,
             max_num_seqs=Config.VLLM_MAX_NUM_SEQS,
-            max_model_len=Config.VLLM_MAX_MODEL_LEN
+            max_model_len=Config.VLLM_MAX_MODEL_LEN,
+            gpu_memory_utilization=Config.VLLM_GPU_MEMORY_UTILIZATION,
         )
         
         # Create default sampling parameters
