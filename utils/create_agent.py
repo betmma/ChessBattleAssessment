@@ -24,7 +24,7 @@ def create_api_agent(model, api_base_url, api_key):
         raise ImportError("OpenAI and httpx packages are required for API agents")
     
     if not api_base_url or not api_key:
-        raise ValueError(f"API base URL and API key are required for {agent_name}")
+        raise ValueError(f"API base URL and API key are required for {model}")
     
     try:
         client = OpenAI(

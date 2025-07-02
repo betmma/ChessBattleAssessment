@@ -166,6 +166,20 @@ class Connect4Game(Game):
         
         return s.strip()
     
+    def get_board_representation_with_coordinates(self) -> str:
+        """Get board state representation with coordinates for each cell"""
+        s = "Current Connect 4 board state with coordinates:\n"
+        
+        for row in range(self.rows):
+            row_parts = []
+            for col in range(self.cols):
+                symbol = self.get_player_symbol(self.board[row][col])
+                coord_str = f"({row},{col}): {symbol}"
+                row_parts.append(coord_str)
+            s += ", ".join(row_parts) + "\n"
+        
+        return s.strip()
+    
     def get_chat_history_for_llm(self, llm: Agent) -> List[dict]:
         """Get prompt for agent describing current game state"""
         board_representation = self.get_board_representation_for_llm()
