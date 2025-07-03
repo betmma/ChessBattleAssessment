@@ -23,6 +23,7 @@ class Config:
     LOG_LEVEL = logging.INFO
     OUTPUT_DIR_BASE = "./evaluation_results"
     CUDA_VISIBLE_DEVICES = "7"
+    LOG_ACTION_REWARDS = True  # Enable logging of action rewards during evaluation
     
     @property
     def OUTPUT_DIR(self):

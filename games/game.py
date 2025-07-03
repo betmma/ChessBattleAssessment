@@ -67,3 +67,12 @@ class Game(ABC):
         if they need special handling for forfeits.
         """
         pass
+    
+    def get_action_rewards(self) -> Dict[str, float]:
+        """
+        Get reward values for every possible move from the current player's perspective for reinforcement learning.
+        Default implementation returns an empty dictionary.
+        
+        Subclasses should override this method to provide specific rewards.
+        """
+        return {}

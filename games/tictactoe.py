@@ -1,5 +1,5 @@
 import copy
-from typing import List, Tuple, Optional, Any
+from typing import List, Tuple, Optional, Dict
 import sys
 import os
 import re
@@ -203,3 +203,10 @@ class TicTacToeGame(Game):
     def clone(self):
         """Create a deep copy of the game"""
         return copy.deepcopy(self)
+    
+    def get_action_rewards(self) -> Dict[str, float]:
+        '''Use minimax agent to get rewards for each action'''
+        from agents.minimax_agent_tictactoe import MinimaxAgentTicTacToe
+        if not hasattr(TicTacToeGame, '_minimax_agent'):
+            TicTacToeGame._minimax_agent = MinimaxAgentTicTacToe()
+        return TicTacToeGame._minimax_agent.get_action_rewards(self)

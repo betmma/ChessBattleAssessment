@@ -111,6 +111,39 @@ class MinimaxAgentTicTacToe(Agent):
         self.score_cache[state_key] = best_score
         return best_score
     
+    def get_action_rewards(self, game) -> dict[str, float]:
+        """
+        Get reward values for every possible move from the current player's perspective.
+        This can be used for training a reinforcement learning model.
+
+        Args:
+            game: Game object
+
+        Returns:
+            A dictionary mapping each legal move (as a string) to its minimax score.
+        """
+        player_value = game.get_current_player()
+        legal_moves = game.get_legal_moves()
+        rewards = {}
+
+        if not legal_moves:
+            return {}
+
+        for move in legal_moves:
+            temp_game = game.clone()
+            temp_game.make_move(move)
+
+            # The score is always from the perspective of player 1 (X).
+            score = self.minimax(temp_game)
+
+            # The reward for an action is the value of the resulting state from the current player's perspective.
+            # If current player is X (1), reward is the score.
+            # If current player is O (-1), reward is the negative of the score, as a good score for X is a bad state for O.
+            reward = score if player_value == 1 else -score
+            rewards[str(move)] = reward
+
+        return rewards
+    
     def _get_state_key(self, game):
         """
         Create a hashable representation of the TicTacToe game state

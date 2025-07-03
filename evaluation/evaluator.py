@@ -77,8 +77,8 @@ class EvaluationLogger:
     def log_move_attempt(self, game_id: int, agent_tag: str, board_before: Any, move_input: Any, 
                          parsed_move: Optional[Any], is_valid: bool, retry_count: int, 
                          result_status: str, # "continued", "retry", "forfeit"
-                         raw_output: str):
-        self.game_logs_data["games"][str(game_id)]["moves"].append({
+                         raw_output: str, action_rewards: Optional[Dict[str, float]] = None):
+        move_log = {
             "agent": agent_tag, # 'agent1' or 'agent2'
             "board_before": board_before,
             "move": str(parsed_move) if parsed_move is not None else str(move_input),
@@ -86,7 +86,13 @@ class EvaluationLogger:
             "retry_count": retry_count,
             "result": result_status,
             "raw_output": raw_output
-        })
+        }
+        
+        # Add action rewards if provided and config enables it
+        if action_rewards is not None and self.config.LOG_ACTION_REWARDS:
+            move_log["action_rewards"] = action_rewards
+            
+        self.game_logs_data["games"][str(game_id)]["moves"].append(move_log)
 
     def log_game_completion(self, game_id: int, final_board: Any, game_state: GameState):
         self.game_logs_data["games"][str(game_id)]["final_board"] = final_board
@@ -283,6 +289,16 @@ class GameRunner:
         """Applies a move to a game and returns a move event dictionary for logging."""
         game = game_state.game
         board_before = game.get_state_representation()
+        
+        # Get action rewards before making the move (if config enables it)
+        action_rewards = None
+        if self.config.LOG_ACTION_REWARDS:
+            try:
+                action_rewards = game.get_action_rewards()
+            except Exception as e:
+                logging.warning(f"GameRunner: Game {game_state.game_id}: Failed to get action rewards: {e}")
+                action_rewards = None
+        
         parsed_move = None
         is_valid_move = False
         result_status = "continued" # "retry", "forfeit", "continued"
@@ -323,7 +339,7 @@ class GameRunner:
             "type": "move_attempt", "game_id": game_state.game_id, "agent_tag": agent_tag,
             "board_before": board_before, "move_input": move_input, "parsed_move": parsed_move,
             "is_valid": is_valid_move, "retry_count": game_state.retry_count if result_status != "forfeit" else self.retry_limit,
-            "result_status": result_status, "raw_output": str(move_input)
+            "result_status": result_status, "raw_output": str(move_input), "action_rewards": action_rewards
         }
 
     def get_completed_game_count(self) -> int:
@@ -371,7 +387,7 @@ class Evaluator:
                         board_before=event["board_before"], move_input=event["move_input"],
                         parsed_move=event["parsed_move"], is_valid=event["is_valid"],
                         retry_count=event["retry_count"], result_status=event["result_status"],
-                        raw_output=event["raw_output"]
+                        raw_output=event["raw_output"], action_rewards=event.get("action_rewards")
                     )
 
             current_total_completed = runner.get_completed_game_count()
