@@ -68,6 +68,7 @@ class Game(ABC):
         """
         pass
     
+    @abstractmethod
     def get_action_rewards(self) -> Dict[str, float]:
         """
         Get reward values for every possible move from the current player's perspective for reinforcement learning.
@@ -76,3 +77,21 @@ class Game(ABC):
         Subclasses should override this method to provide specific rewards.
         """
         return {}
+    
+    @abstractmethod
+    def evaluate_position(self) -> float:
+        """
+        Evaluate the current position from player 1's perspective.
+        Used by minimax when depth limit is reached.
+        
+        Returns:
+            float: Position score from player 1's perspective.
+                  Positive values favor player 1, negative favor player -1.
+                  Should be in a reasonable range (e.g., -100 to 100).
+        """
+        pass
+    
+    @abstractmethod
+    def clone(self):
+        """Create a deep copy of the current game state"""
+        pass

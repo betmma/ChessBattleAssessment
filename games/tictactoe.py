@@ -200,6 +200,51 @@ class TicTacToeGame(Game):
         """Force game end (for evaluation)"""
         self._game_over_forced_forfeit = True
         
+    def evaluate_position(self) -> float:
+        """
+        Evaluate the current position from player 1's perspective.
+        For TicTacToe, since games are short, this is mainly for completeness.
+        """
+        # For TicTacToe, positions are usually evaluated to completion
+        # This is mainly for edge cases or when depth is artificially limited
+        winner = self.check_winner()
+        if winner is not None:
+            if winner == 1:
+                return 10.0  # X wins
+            elif winner == -1:
+                return -10.0  # O wins
+            else:
+                return 0.0  # Draw
+        
+        # For non-terminal positions, evaluate based on potential winning lines
+        score = 0.0
+        lines = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8],  # Rows
+            [0, 3, 6], [1, 4, 7], [2, 5, 8],  # Columns
+            [0, 4, 8], [2, 4, 6]              # Diagonals
+        ]
+        
+        for line in lines:
+            x_count = sum(1 for i in line if self.board[i] == 1)
+            o_count = sum(1 for i in line if self.board[i] == -1)
+            empty_count = sum(1 for i in line if self.board[i] == 0)
+            
+            # If both players have pieces in the line, it's blocked
+            if x_count > 0 and o_count > 0:
+                continue
+                
+            # Score for potential winning lines
+            if x_count == 2 and empty_count == 1:
+                score += 5.0
+            elif x_count == 1 and empty_count == 2:
+                score += 1.0
+            elif o_count == 2 and empty_count == 1:
+                score -= 5.0
+            elif o_count == 1 and empty_count == 2:
+                score -= 1.0
+        
+        return score
+    
     def clone(self):
         """Create a deep copy of the game"""
         return copy.deepcopy(self)

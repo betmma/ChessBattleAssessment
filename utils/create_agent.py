@@ -1,4 +1,5 @@
 from agents import RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
+from agents.universal_minimax_agent import UniversalMinimaxAgent
 
 try:
     from openai import OpenAI
@@ -86,6 +87,10 @@ def create_agent(agent_type, agent_name=None, **kwargs):
         agent = RandomAgent()
     elif agent_type == "minimax":
         agent = MinimaxAgent(random_chance=kwargs.get('random_chance', 0.0))
+    elif agent_type == "universal_minimax":
+        agent = UniversalMinimaxAgent(
+            max_depth=kwargs.get('max_depth', 4),
+        )
     elif agent_type == "vllm":
         agent=create_vllm_agent(
             kwargs.get('model_path'),

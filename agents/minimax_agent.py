@@ -4,8 +4,7 @@ import os,random
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from agents.agent import Agent
-from agents.minimax_agent_tictactoe import MinimaxAgentTicTacToe
-from agents.minimax_agent_connect4 import MinimaxAgentConnect4
+from agents.universal_minimax_agent import UniversalMinimaxAgent
 from agents.random_agent import RandomAgent
 
 class MinimaxAgent(Agent):
@@ -16,8 +15,7 @@ class MinimaxAgent(Agent):
     def __init__(self, name: str = "Default", depth: int = 4, random_chance: float = 0.0):
         super().__init__(name)
         self.depth = depth
-        self.tictactoe_agent = MinimaxAgentTicTacToe(f"{name}-TicTacToe")
-        self.connect4_agent = MinimaxAgentConnect4(f"{name}-Connect4", max_depth=depth)
+        self.universal_agent = UniversalMinimaxAgent(name=f"{name}-Universal", max_depth=depth)
         self.random_chance = random_chance
         self.random_agent = RandomAgent()
         if self.name=="Default":
@@ -33,19 +31,13 @@ class MinimaxAgent(Agent):
         Returns:
             str: The chosen move as a string
         """
-        # Lazy import to avoid circular import
-        from games import TicTacToeGame, Connect4Game
         
         if random.random() < self.random_chance:
             # Use random agent with specified chance
             return self.random_agent.get_move(game)
-        if isinstance(game, TicTacToeGame):
-            return self.tictactoe_agent.get_move(game)
-        elif isinstance(game, Connect4Game):
-            return self.connect4_agent.get_move(game)
         else:
-            raise ValueError(f"Unsupported game type: {type(game)}")
-    
+            return self.universal_agent.get_move(game)
+
     def set_depth(self, depth: int):
         """
         Set the search depth for both agents
@@ -56,12 +48,15 @@ class MinimaxAgent(Agent):
         self.depth = depth
         self.connect4_agent.max_depth = depth
         # TicTacToe doesn't use depth limit as it can solve completely
-    
-    def get_supported_games(self):
+
+    def get_action_rewards(self, game) -> dict[str, float]:
         """
-        Get list of supported game types
+        Get action rewards for the current game state
         
+        Args:
+            game: Game object
+            
         Returns:
-            List[str]: List of supported game types
+            dict[str, float]: Dictionary of action rewards
         """
-        return ['tictactoe', 'connect4']
+        return self.universal_agent.get_action_rewards(game)

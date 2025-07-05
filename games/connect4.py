@@ -266,6 +266,79 @@ class Connect4Game(Game):
         """Force game end (for evaluation)"""
         self._game_over_forced_forfeit = True
         
+    def evaluate_position(self) -> float:
+        """
+        Evaluate the current position from player 1's perspective.
+        Uses the same heuristic as the original Connect4 minimax agent.
+        """
+        # Check if game is already won
+        winner = self.check_winner()
+        if winner is not None:
+            if winner == 1:
+                return 100.0  # Player 1 wins
+            elif winner == -1:
+                return -100.0  # Player -1 wins
+            else:
+                return 0.0  # Draw
+        
+        score = 0.0
+        
+        # Evaluate all possible 4-in-a-row positions
+        directions = [(0, 1), (1, 0), (1, 1), (1, -1)]  # horizontal, vertical, diagonal
+        
+        for row in range(self.rows):
+            for col in range(self.cols):
+                for dr, dc in directions:
+                    window = []
+                    for i in range(4):
+                        r, c = row + i * dr, col + i * dc
+                        if 0 <= r < self.rows and 0 <= c < self.cols:
+                            window.append(self.board[r][c])
+                        else:
+                            break
+                    
+                    if len(window) == 4:
+                        score += self._evaluate_window(window)
+        
+        return score
+    
+    def _evaluate_window(self, window):
+        """
+        Evaluate a 4-piece window for Connect4
+        
+        Args:
+            window: List of 4 pieces (1 for player 1, -1 for player -1, 0 for empty)
+            
+        Returns:
+            Score for this window
+        """
+        score = 0
+        player1_count = window.count(1)
+        player2_count = window.count(-1)
+        empty_count = window.count(0)
+        
+        # If both players have pieces in the window, it's blocked
+        if player1_count > 0 and player2_count > 0:
+            return 0
+        
+        # Score for player 1 (maximizing player)
+        if player1_count == 4:
+            score += 100
+        elif player1_count == 3 and empty_count == 1:
+            score += 10
+        elif player1_count == 2 and empty_count == 2:
+            score += 2
+        
+        # Score for player -1 (minimizing player)
+        if player2_count == 4:
+            score -= 100
+        elif player2_count == 3 and empty_count == 1:
+            score -= 10
+        elif player2_count == 2 and empty_count == 2:
+            score -= 2
+        
+        return score
+    
     def clone(self):
         """Create a deep copy of the game"""
         return copy.deepcopy(self)
