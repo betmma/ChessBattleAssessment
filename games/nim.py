@@ -38,7 +38,7 @@ class NimGame(Game):
         self.system_prompt = (
             "You are playing Nim. In this game, there are multiple piles of stones. "
             "On your turn, you must remove one or more stones from exactly ONE pile. "
-            "The player who takes the LAST stone loses the game. "
+            "The player who takes the LAST stone LOSES the game. "
             # "Think strategically about the Nim-sum (XOR of all pile sizes) to find the optimal move. "
             "After your thinking, provide your move as (pile_index, stones_to_remove). "
             "Example: To remove 2 stones from pile 0, respond with `(0,2)`. "
@@ -52,16 +52,16 @@ class NimGame(Game):
         )
         self.system_prompt_no_thinking = (
             "You are playing Nim. Remove stones from exactly ONE pile on your turn. "
-            "The player who takes the LAST stone loses. "
-            "Your response MUST be your chosen move as (pile_index, stones_to_remove), enclosed in square brackets. "
-            "Example: To remove 2 stones from pile 0, respond with `[0,2]`. "
+            "The player who takes the LAST stone LOSES. "
+            "Your response MUST be your chosen move as (pile_index, stones_to_remove). "
+            "Example: To remove 2 stones from pile 0, respond with `(0,2)`. "
             "Do not add any other text or explanation."
         )
         self.user_prompt_template_no_thinking = (
             "{board_representation}\n"
             "You are player '{player_symbol}'.\n"
             "Your available legal moves: [{legal_moves_str}]\n"
-            "Choose your move (e.g., `[0,2]` to remove 2 stones from pile 0):"
+            "Choose your move (e.g., `(0,2)` to remove 2 stones from pile 0):"
         )
     
     def get_player_symbol(self, player_value):

@@ -12,6 +12,9 @@ class Config:
     
     MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
     
+    # Evaluation Settings
+    NUM_EVAL_GAMES = 50  # Default number of games to evaluate
+    
     # Generation Settings
     MAX_PROMPT_LENGTH = 512  # Max length for tokenizer context for prompts
     MAX_GENERATION_LENGTH = 1024  # Max new tokens for LLM to generate for a move

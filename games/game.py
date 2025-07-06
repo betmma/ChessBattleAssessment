@@ -4,6 +4,10 @@ from typing import List, Tuple, Optional, Any, Dict
 class Game(ABC):
     """Base abstract class for all games. All game implementations must inherit from this."""
     
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.name = cls.__name__.removesuffix('Game')
+        
     def __init__(self):
         """Initialize common game attributes"""
         self.current_player = 1  # Current player identifier
@@ -13,12 +17,12 @@ class Game(ABC):
         #    ("{board_representation}\n"
         #     "You are player '{player_symbol}'.\n"
         #     "Your available legal moves (columns): [{legal_moves_str}]\n"
-        #     "Provide your thinking and final move in the specified format: `[column_number]`")
+        #     "Provide your thinking and final move in the specified format: `(column_number)`")
         self.user_prompt_template = None
         self.system_prompt_no_thinking = None  # System prompt without thinking requirement
         self.user_prompt_template_no_thinking = None  # User prompt template without thinking
         self.empty_symbol = '.'  # Symbol for empty positions
-        self.name = self.__class__.__name__.removesuffix('Game')  # Default game name based on class name
+        self.name = self.__class__.name  # Default game name based on class name
     
     @abstractmethod
     def get_legal_moves(self) -> List[Any]:

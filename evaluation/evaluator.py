@@ -358,11 +358,26 @@ class Evaluator:
         Evaluate one agent against another on a specific game.
         Orchestrates GameRunner and EvaluationLogger.
         """
+        # Use the _with_logger method internally and only return the results
+        results, logger = self.evaluate_agent_vs_agent_with_logger(agent1, agent2, game_class, num_games)
+        
+        # Handle logging based on no_logging flag
+        if not no_logging:
+            logger.save_detailed_logs_to_file()
+            logger.save_summary_report_to_file(results)
+        
+        return results
+
+    def evaluate_agent_vs_agent_with_logger(self, agent1, agent2, game_class, num_games: Optional[int] = None) -> Tuple[Dict, 'EvaluationLogger']:
+        """
+        Evaluate one agent against another on a specific game and return both results and the logger.
+        This method is useful when you want to access the detailed logs without saving them immediately.
+        """
         num_games_to_run = num_games if num_games is not None else self.config.NUM_EVAL_GAMES
         
-        logging.info(f"Starting evaluation: {agent1.name} vs {agent2.name} on {game_class.__name__} for {num_games_to_run} games.")
+        logging.info(f"Starting evaluation: {agent1.name} vs {agent2.name} on {game_class.name} for {num_games_to_run} games.")
 
-        logger = EvaluationLogger(agent1.name, agent2.name, game_class.__name__, self.config)
+        logger = EvaluationLogger(agent1.name, agent2.name, game_class.name, self.config)
         runner = GameRunner(agent1, agent2, game_class, num_games_to_run, self.retry_limit, self.config)
 
         # Log initial game states
@@ -378,10 +393,10 @@ class Evaluator:
         
         completed_count = 0
         while completed_count < num_games_to_run:
-            events = runner.process_one_turn() # Now only returns move_attempt events
+            events = runner.process_one_turn()
             
             for event in events:
-                if event["type"] == "move_attempt": # This will always be true now
+                if event["type"] == "move_attempt":
                     logger.log_move_attempt(
                         game_id=event["game_id"], agent_tag=event["agent_tag"],
                         board_before=event["board_before"], move_input=event["move_input"],
@@ -411,17 +426,147 @@ class Evaluator:
 
         # Log all game completions after the main loop
         for gs in runner.game_states:
-            if gs.is_complete: # Ensure we only log completed games
+            if gs.is_complete:
                 logger.log_game_completion(
                     game_id=gs.game_id,
-                    final_board=gs.game.get_state_representation(), # Get final board state here
+                    final_board=gs.game.get_state_representation(),
                     game_state=gs
                 )
         
         final_summary_results = logger.generate_final_summary(num_games_to_run)
-        if not no_logging:
-            logger.save_detailed_logs_to_file()
-            logger.save_summary_report_to_file(final_summary_results)
         
         logging.info(f"Evaluation finished for {agent1.name} vs {agent2.name}.")
-        return final_summary_results
+        return final_summary_results, logger
+
+class ConsolidatedLogger:
+    """Consolidates logs from multiple game evaluations into a single file."""
+    
+    def __init__(self, agent1_name: str, agent2_name: str, config: Config):
+        self.agent1_name = agent1_name
+        self.agent2_name = agent2_name
+        self.config = config
+        self.consolidated_data = {
+            "evaluation_metadata": {
+                "agent1": agent1_name,
+                "agent2": agent2_name,
+                "evaluation_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "games_evaluated": []
+            },
+            "game_results": {},  # Will contain results for each game type
+            "detailed_logs": {}  # Will contain detailed logs for each game type
+        }
+        self.consolidated_summary = {
+            "total_games_across_all_types": 0,
+            "total_agent1_wins": 0,
+            "total_agent2_wins": 0,
+            "total_draws": 0,
+            "total_forfeits_agent1": 0,
+            "total_forfeits_agent2": 0,
+            "game_type_summaries": {}
+        }
+    
+    def add_game_evaluation_data(self, game_class_name: str, evaluation_logger: 'EvaluationLogger', results: Dict):
+        """Add data from a single game type evaluation to the consolidated logs."""
+        self.consolidated_data["evaluation_metadata"]["games_evaluated"].append(game_class_name)
+        
+        # Store the results summary
+        self.consolidated_data["game_results"][game_class_name] = results
+        
+        # Store the detailed logs
+        self.consolidated_data["detailed_logs"][game_class_name] = evaluation_logger.game_logs_data
+        
+        # Update consolidated summary
+        self.consolidated_summary["total_games_across_all_types"] += results.get('total_games', 0)
+        self.consolidated_summary["total_agent1_wins"] += results.get('wins_agent1', 0)
+        self.consolidated_summary["total_agent2_wins"] += results.get('wins_agent2', 0)
+        self.consolidated_summary["total_draws"] += results.get('draws', 0)
+        self.consolidated_summary["total_forfeits_agent1"] += results.get('forfeits_agent1', 0)
+        self.consolidated_summary["total_forfeits_agent2"] += results.get('forfeits_agent2', 0)
+        
+        # Store individual game summary
+        self.consolidated_summary["game_type_summaries"][game_class_name] = results
+    
+    def save_consolidated_logs_to_file(self) -> str:
+        """Save all consolidated logs to a single JSON file."""
+        log_dir = os.path.join(self.config.OUTPUT_DIR, "game_logs")
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Create a comprehensive filename
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        log_filename = f"CONSOLIDATED_{self.agent1_name}_vs_{self.agent2_name}_{timestamp}.json"
+        game_log_path = os.path.join(log_dir, log_filename)
+        
+        # Combine all data into final structure
+        final_data = {
+            **self.consolidated_data,
+            "consolidated_summary": self.consolidated_summary
+        }
+        
+        with open(game_log_path, 'w') as f:
+            json.dump(final_data, f, indent=2)
+        
+        logging.info(f"Consolidated game logs saved to {game_log_path}")
+        return game_log_path
+    
+    def save_consolidated_summary_report(self) -> str:
+        """Save a consolidated summary report to a text file."""
+        output_dir = self.config.OUTPUT_DIR
+        os.makedirs(output_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        results_path = os.path.join(output_dir, f"CONSOLIDATED_summary_{self.agent1_name}_vs_{self.agent2_name}_{timestamp}.txt")
+        
+        with open(results_path, 'w') as f:
+            f.write("="*80 + "\n")
+            f.write("CONSOLIDATED GAME EVALUATION RESULTS\n")
+            f.write("="*80 + "\n")
+            f.write(f"Evaluation Date: {self.consolidated_data['evaluation_metadata']['evaluation_date']}\n")
+            f.write(f"Agent1: {self.agent1_name}\n")
+            f.write(f"Agent2: {self.agent2_name}\n")
+            f.write(f"Games Evaluated: {', '.join(self.consolidated_data['evaluation_metadata']['games_evaluated'])}\n\n")
+            
+            # Overall totals
+            total_games = self.consolidated_summary["total_games_across_all_types"]
+            total_agent1_wins = self.consolidated_summary["total_agent1_wins"]
+            total_agent2_wins = self.consolidated_summary["total_agent2_wins"]
+            total_draws = self.consolidated_summary["total_draws"]
+            total_forfeits = self.consolidated_summary["total_forfeits_agent1"] + self.consolidated_summary["total_forfeits_agent2"]
+            
+            f.write("OVERALL TOTALS:\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"Total Games: {total_games}\n")
+            f.write(f"{self.agent1_name} Wins: {total_agent1_wins}\n")
+            f.write(f"{self.agent2_name} Wins: {total_agent2_wins}\n")
+            f.write(f"Draws: {total_draws}\n")
+            f.write(f"Total Forfeits: {total_forfeits}\n")
+            
+            # Calculate overall win rates
+            valid_games = total_agent1_wins + total_agent2_wins + total_draws
+            if valid_games > 0:
+                agent1_win_rate = (total_agent1_wins / valid_games) * 100
+                agent2_win_rate = (total_agent2_wins / valid_games) * 100
+                draw_rate = (total_draws / valid_games) * 100
+                
+                f.write(f"{self.agent1_name} Win Rate: {agent1_win_rate:.1f}%\n")
+                f.write(f"{self.agent2_name} Win Rate: {agent2_win_rate:.1f}%\n")
+                f.write(f"Draw Rate: {draw_rate:.1f}%\n")
+            
+            f.write("\n" + "="*80 + "\n")
+            f.write("BREAKDOWN BY GAME TYPE:\n")
+            f.write("="*80 + "\n")
+            
+            # Individual game results
+            for game_name, results in self.consolidated_summary["game_type_summaries"].items():
+                f.write(f"\n{game_name}:\n")
+                f.write("-" * len(game_name) + "--\n")
+                f.write(f"  Games: {results.get('total_games', 0)}\n")
+                f.write(f"  {self.agent1_name} Wins: {results.get('wins_agent1', 0)} ({results.get('win_rate_agent1', 0):.2%})\n")
+                f.write(f"  {self.agent2_name} Wins: {results.get('wins_agent2', 0)} ({results.get('win_rate_agent2', 0):.2%})\n")
+                f.write(f"  Draws: {results.get('draws', 0)} ({results.get('draw_rate', 0):.2%})\n")
+                f.write(f"  {self.agent1_name} Forfeits: {results.get('forfeits_agent1', 0)}\n")
+                f.write(f"  {self.agent2_name} Forfeits: {results.get('forfeits_agent2', 0)}\n")
+            
+            f.write("\n" + "="*80 + "\n")
+        
+        logging.info(f"Consolidated summary report saved to {results_path}")
+        return results_path
