@@ -110,23 +110,6 @@ class TicTacToeGame(Game):
         """Get current player (1 for X, -1 for O)"""
         return self.current_player
     
-    def get_state_representation(self) -> str:
-        """Get string representation of current game state"""
-        board_str = "Current Board State:\n"
-        for r in range(3):
-            row_cells = []
-            for c in range(3):
-                idx = r * 3 + c
-                symbol = self.get_player_symbol(self.board[idx])
-                row_cells.append(f"({r},{c}):\"{symbol}\"")
-            board_str += "  ".join(row_cells) + "\n"
-        
-        current_player_symbol = self.get_player_symbol(self.current_player)
-        board_str += f"Current turn: {current_player_symbol} (plays as {self.current_player})\n"
-        board_str += f"Legal moves (row,col): {self.get_legal_moves()}\n"
-        
-        return board_str
-    
     def get_board_representation_for_llm(self) -> str:
         """Get board state representation for LLM"""
         s = "Current board state (row,col format):\n"
@@ -139,29 +122,13 @@ class TicTacToeGame(Game):
             s += "  ".join(row_str_parts) + "\n" 
         return s.strip()
     
-    def get_chat_history_for_llm(self, llm: Agent) -> str:
+    def get_chat_history_for_llm(self, llm: Agent) -> List[Dict[str, str]]:
         """Get prompt for agent describing current game state"""
-        board_representation = self.get_board_representation_for_llm()
-        player_symbol = self.get_player_symbol(self.current_player)
-        legal_moves = self.get_legal_moves()
-        legal_moves_str = ", ".join([f"({r},{c})" for r, c in legal_moves])
-        
-        system_prompt = self.system_prompt
-        user_prompt_template = self.user_prompt_template
-        
-        if isinstance(llm, VLLMAgent) and not llm.enable_thinking:
-            system_prompt = self.system_prompt_no_thinking
-            user_prompt_template = self.user_prompt_template_no_thinking
-        user_prompt = user_prompt_template.format(
-            board_representation=board_representation,
-            player_symbol=player_symbol,
-            legal_moves_str=legal_moves_str
-        )
-        
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
+        return super().get_chat_history_for_llm(llm)
+    
+    def _format_legal_moves_for_prompt(self, legal_moves: List[Tuple[int, int]]) -> str:
+        """Format legal moves for TicTacToe as (row,col) pairs"""
+        return ", ".join([f"({r},{c})" for r, c in legal_moves])
     
     def parse_move_from_output(self, raw_output: str, legal_moves: List[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
         """
@@ -255,3 +222,74 @@ class TicTacToeGame(Game):
         if not hasattr(TicTacToeGame, '_minimax_agent'):
             TicTacToeGame._minimax_agent = MinimaxAgentTicTacToe()
         return TicTacToeGame._minimax_agent.get_action_rewards(self)
+    
+    def load_state_from_representation(self, state_str: str) -> bool:
+        """
+        Load TicTacToe game state from string representation.
+        
+        Args:
+            state_str: String representation from get_state_representation()
+            
+        Returns:
+            bool: True if state was loaded successfully, False if parsing failed
+        """
+        try:
+            lines = state_str.strip().split('\n')
+            
+            # Check if this looks like a valid TicTacToe state
+            if not any("row,col format" in line for line in lines):
+                return False
+            
+            # Parse board from the coordinate format
+            new_board = [0] * 9
+            found_coordinates = 0
+            
+            for line in lines:
+                if line.strip().startswith("Current turn:"):
+                    break
+                
+                # Look for coordinate patterns like (0,0):"X"
+                import re
+                matches = re.findall(r'\((\d),(\d)\):"([XO.])"', line)
+                for match in matches:
+                    row, col, symbol = int(match[0]), int(match[1]), match[2]
+                    if row >= 3 or col >= 3:  # Invalid coordinates
+                        return False
+                    idx = row * 3 + col
+                    if 0 <= idx < 9:
+                        if symbol == 'X':
+                            new_board[idx] = 1
+                        elif symbol == 'O':
+                            new_board[idx] = -1
+                        else:  # '.'
+                            new_board[idx] = 0
+                        found_coordinates += 1
+            
+            # We should have found exactly 9 coordinates for a valid TicTacToe board
+            if found_coordinates != 9:
+                return False
+            
+            # Parse current player
+            current_player = 1
+            found_current_turn = False
+            for line in lines:
+                if line.strip().startswith("Current turn:"):
+                    found_current_turn = True
+                    if "(plays as -1)" in line:
+                        current_player = -1
+                    elif "(plays as 1)" in line:
+                        current_player = 1
+                    break
+            
+            if not found_current_turn:
+                return False
+            
+            # Update game state
+            self.board = new_board
+            self.current_player = current_player
+            self._game_over_forced_forfeit = False
+            
+            return True
+            
+        except Exception:
+            return False

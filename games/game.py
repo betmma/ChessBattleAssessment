@@ -9,7 +9,12 @@ class Game(ABC):
         self.current_player = 1  # Current player identifier
         self._game_over_forced_forfeit = False  # For forcing game end in evaluation
         self.system_prompt = None  # System prompt for LLM
-        self.user_prompt_template = None  # User prompt template for LLM
+        # User prompt template for LLM. example:
+        #    ("{board_representation}\n"
+        #     "You are player '{player_symbol}'.\n"
+        #     "Your available legal moves (columns): [{legal_moves_str}]\n"
+        #     "Provide your thinking and final move in the specified format: `[column_number]`")
+        self.user_prompt_template = None
         self.system_prompt_no_thinking = None  # System prompt without thinking requirement
         self.user_prompt_template_no_thinking = None  # User prompt template without thinking
         self.empty_symbol = '.'  # Symbol for empty positions
@@ -41,14 +46,71 @@ class Game(ABC):
         pass
     
     @abstractmethod
+    def get_board_representation_for_llm(self) -> str:
+        """Get board state representation for LLM"""
+        pass
+    
     def get_state_representation(self) -> str:
         """Get a string representation of game state, for display or debugging"""
+        # Use the LLM representation as base and add metadata
+        board_repr = self.get_board_representation_for_llm()
+        current_player_symbol = self.get_player_symbol(self.current_player)
+        legal_moves = self.get_legal_moves()
+        
+        state_str = board_repr + "\n"
+        state_str += f"Current turn: {current_player_symbol} (plays as {self.current_player})\n"
+        state_str += f"Legal moves: {legal_moves}\n"
+        
+        return state_str
+    
+    @abstractmethod
+    def load_state_from_representation(self, state_str: str) -> bool:
+        """
+        Load game state from a string representation (reverse of get_state_representation).
+        
+        Args:
+            state_str: String representation of game state, typically from get_state_representation()
+            
+        Returns:
+            bool: True if state was loaded successfully, False if parsing failed
+        """
         pass
     
     @abstractmethod
+    def get_player_symbol(self, player_value: Any) -> str:
+        """Get the symbol representation for a player"""
+        pass
+    
     def get_chat_history_for_llm(self, llm) -> List[Dict[str, str]]:
         """Get the chat history to send to llm, including system prompt and game state"""
-        pass
+        from agents.vllm_agent import VLLMAgent
+        
+        board_representation = self.get_board_representation_for_llm()
+        player_symbol = self.get_player_symbol(self.current_player)
+        legal_moves = self.get_legal_moves()
+        legal_moves_str = self._format_legal_moves_for_prompt(legal_moves)
+        
+        system_prompt = self.system_prompt
+        user_prompt_template = self.user_prompt_template
+        
+        if isinstance(llm, VLLMAgent) and not llm.enable_thinking:
+            system_prompt = self.system_prompt_no_thinking
+            user_prompt_template = self.user_prompt_template_no_thinking
+            
+        user_prompt = user_prompt_template.format(
+            board_representation=board_representation,
+            player_symbol=player_symbol,
+            legal_moves_str=legal_moves_str
+        )
+        
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+    
+    def _format_legal_moves_for_prompt(self, legal_moves: List[Any]) -> str:
+        """Format legal moves for display in prompt. Can be overridden by subclasses."""
+        return ", ".join([str(move) for move in legal_moves])
     
     @abstractmethod
     def parse_move_from_output(self, raw_output: str, legal_moves: List[Any]) -> Optional[Any]:

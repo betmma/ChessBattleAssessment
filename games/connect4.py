@@ -134,24 +134,6 @@ class Connect4Game(Game):
         """Get current player (1 for Red, -1 for Yellow)"""
         return self.current_player
     
-    def get_state_representation(self) -> str:
-        """Get string representation of current game state"""
-        board_str = "Current Connect 4 Board State:\n"
-        board_str += "  " + " ".join([str(i) for i in range(self.cols)]) + "\n"
-        
-        for row in range(self.rows):
-            row_str = f"{row} "
-            for col in range(self.cols):
-                symbol = self.get_player_symbol(self.board[row][col])
-                row_str += f"{symbol} "
-            board_str += row_str + "\n"
-        
-        current_player_symbol = self.get_player_symbol(self.current_player)
-        board_str += f"Current turn: {current_player_symbol} (plays as {self.current_player})\n"
-        board_str += f"Legal moves (columns): {self.get_legal_moves()}\n"
-        
-        return board_str
-    
     def get_board_representation_for_llm(self) -> str:
         """Get board state representation for LLM"""
         s = "Current Connect 4 board state:\n"
@@ -182,28 +164,7 @@ class Connect4Game(Game):
     
     def get_chat_history_for_llm(self, llm: Agent) -> List[dict]:
         """Get prompt for agent describing current game state"""
-        board_representation = self.get_board_representation_for_llm()
-        player_symbol = self.get_player_symbol(self.current_player)
-        legal_moves = self.get_legal_moves()
-        legal_moves_str = ", ".join([str(col) for col in legal_moves])
-        
-        system_prompt = self.system_prompt
-        user_prompt_template = self.user_prompt_template
-        
-        if isinstance(llm, VLLMAgent) and not llm.enable_thinking:
-            system_prompt = self.system_prompt_no_thinking
-            user_prompt_template = self.user_prompt_template_no_thinking
-            
-        user_prompt = user_prompt_template.format(
-            board_representation=board_representation,
-            player_symbol=player_symbol,
-            legal_moves_str=legal_moves_str
-        )
-        
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
+        return super().get_chat_history_for_llm(llm)
     
     def parse_move_from_output(self, raw_output: str, legal_moves: List[int]) -> Optional[int]:
         """
@@ -349,3 +310,88 @@ class Connect4Game(Game):
         if not hasattr(Connect4Game, '_minimax_agent'):
             Connect4Game._minimax_agent = MinimaxAgentConnect4()
         return Connect4Game._minimax_agent.get_action_rewards(self)
+    
+    def load_state_from_representation(self, state_str: str) -> bool:
+        """
+        Load Connect4 game state from string representation.
+        
+        Args:
+            state_str: String representation from get_state_representation()
+            
+        Returns:
+            bool: True if state was loaded successfully, False if parsing failed
+        """
+        try:
+            lines = state_str.strip().split('\n')
+            
+            # Check if this looks like a valid Connect4 state
+            if not any("Connect 4 board state" in line for line in lines):
+                return False
+            
+            # Find the board section (starts with "Columns:")
+            board_start = -1
+            for i, line in enumerate(lines):
+                if line.strip().startswith("Columns:"):
+                    board_start = i + 1
+                    break
+            
+            if board_start == -1:
+                return False
+            
+            # Parse board rows
+            new_board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
+            board_row = 0
+            
+            for i in range(board_start, len(lines)):
+                line = lines[i].strip()
+                if line.startswith("Current turn:"):
+                    break
+                
+                # Skip empty lines and lines that don't look like board rows
+                if not line or not any(c in line for c in ['R', 'Y', '.']):
+                    continue
+                
+                # Extract symbols from the line
+                symbols = []
+                for char in line.split():
+                    if char in ['R', 'Y', '.']:
+                        symbols.append(char)
+                
+                if len(symbols) == self.cols and board_row < self.rows:
+                    for col in range(self.cols):
+                        if symbols[col] == 'R':
+                            new_board[board_row][col] = 1
+                        elif symbols[col] == 'Y':
+                            new_board[board_row][col] = -1
+                        else:  # '.'
+                            new_board[board_row][col] = 0
+                    board_row += 1
+            
+            # Check if we parsed the correct number of rows
+            if board_row != self.rows:
+                return False
+            
+            # Parse current player
+            current_player = 1
+            found_current_turn = False
+            for line in lines:
+                if line.strip().startswith("Current turn:"):
+                    found_current_turn = True
+                    if "(plays as -1)" in line:
+                        current_player = -1
+                    elif "(plays as 1)" in line:
+                        current_player = 1
+                    break
+            
+            if not found_current_turn:
+                return False
+            
+            # Update game state
+            self.board = new_board
+            self.current_player = current_player
+            self._game_over_forced_forfeit = False
+            
+            return True
+            
+        except Exception:
+            return False
