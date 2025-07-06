@@ -41,13 +41,30 @@ class LRUCache:
 class UniversalMinimaxAgent(Agent):
     """Universal Minimax agent that works with any game implementing the Game interface"""
     
-    def __init__(self, name: str = "UniversalMinimax", max_depth: int = 4):
+    def __init__(self, name: str = "UniversalMinimax", max_depth: int = 4, debug: bool = False):
         super().__init__(name)
         # Calculate cache size based on available memory
         cache_size = self._calculate_cache_size()
         self.score_cache = LRUCache(cache_size)
         # Maximum search depth
         self.max_depth = max_depth
+        # Debug mode (default: False for production)
+        self.debug = debug
+        # Option to disable caching for debugging
+        self.use_cache = True
+    
+    def set_debug_mode(self, debug: bool):
+        """Enable or disable debug mode"""
+        self.debug = debug
+    
+    def disable_cache(self):
+        """Disable caching for debugging purposes"""
+        self.use_cache = False
+        self.score_cache.clear()
+    
+    def enable_cache(self):
+        """Re-enable caching"""
+        self.use_cache = True
     
     def _calculate_cache_size(self) -> int:
         """Calculate optimal cache size based on available memory"""
@@ -71,54 +88,8 @@ class UniversalMinimaxAgent(Agent):
         Returns:
             str: Best move as string
         """
-        player_value = game.get_current_player()
-        best_move = None
-        legal_moves = game.get_legal_moves()
-
-        if not legal_moves: 
-            return 'No legal moves available'
-
-        if player_value == 1:  # Player 1 (maximizing player)
-            best_score = -float('inf')
-            alpha = -float('inf')
-            beta = float('inf')
-            
-            for move in legal_moves:
-                temp_game = game.clone()
-                temp_game.make_move(move)
-                
-                score = self.minimax_alpha_beta(temp_game, alpha, beta, False, 1)
-                
-                if score > best_score:
-                    best_score = score
-                    best_move = move
-                    
-                alpha = max(alpha, score)
-                if beta <= alpha:
-                    break  # Beta cutoff - pruning
-        else:  # Player -1 (minimizing player)
-            best_score = float('inf')
-            alpha = -float('inf')
-            beta = float('inf')
-            
-            for move in legal_moves:
-                temp_game = game.clone()
-                temp_game.make_move(move)
-                
-                score = self.minimax_alpha_beta(temp_game, alpha, beta, True, 1)
-                
-                if score < best_score:
-                    best_score = score
-                    best_move = move
-                    
-                beta = min(beta, score)
-                if beta <= alpha:
-                    break  # Alpha cutoff - pruning
-        
-        # If all moves have same score, choose randomly
-        if best_move is None and legal_moves:
-            best_move = random.choice(legal_moves)
-            
+        rewards = self.get_action_rewards(game)
+        best_move = max(rewards, key=rewards.get, default=None)
         return str(best_move)
     
     def get_action_rewards(self, game) -> dict[str, float]:
@@ -139,9 +110,6 @@ class UniversalMinimaxAgent(Agent):
         if not legal_moves:
             return {}
 
-        alpha = -float('inf')
-        beta = float('inf')
-
         for move in legal_moves:
             temp_game = game.clone()
             temp_game.make_move(move)
@@ -150,7 +118,7 @@ class UniversalMinimaxAgent(Agent):
             is_next_player_maximizing = (player_value == -1)
 
             # The score is always from the perspective of player 1.
-            score = self.minimax_alpha_beta(temp_game, alpha, beta, is_next_player_maximizing, 1)
+            score = self.minimax_alpha_beta(temp_game, -float('inf'), float('inf'), is_next_player_maximizing, 1)
 
             # The reward for an action is the value of the resulting state from the current player's perspective.
             # If current player is 1, reward is the score.
@@ -162,7 +130,7 @@ class UniversalMinimaxAgent(Agent):
     
     def minimax_alpha_beta(self, game, alpha, beta, maximizing_player, depth):
         """
-        Universal Minimax algorithm with alpha-beta pruning and depth limit
+        Universal Minimax algorithm with alpha-beta pruning and sophisticated caching
         
         Args:
             game: Game object implementing the Game interface
@@ -174,15 +142,32 @@ class UniversalMinimaxAgent(Agent):
         Returns:
             Score from player 1's perspective
         """
+        # Store original alpha-beta bounds for cache validation
+        original_alpha, original_beta = alpha, beta
+        
         # Create a hashable representation of the game state
-        state_key = self._get_state_key(game, depth)
+        # Include depth to properly distinguish positions at different search depths
+        state_key = self._get_state_key(game, depth, include_depth=True)
+        
+        if self.debug:
+            if hasattr(game, 'piles'):
+                print(f"Debug depth {depth}: piles={game.piles}, player={game.get_current_player()}, maximizing={maximizing_player}, state_key={state_key}")
+        
+        # Check game status first
+        winner = game.check_winner()
         
         # Check if this state has already been evaluated
-        cached_result = self.score_cache.get(state_key)
+        # Use cache for terminal positions, heuristic evaluations, and safe intermediate results
+        cached_result = None
+        if self.use_cache and (winner is not None or depth >= self.max_depth):
+            cached_result = self.score_cache.get(state_key)
+        
         if cached_result is not None:
+            if self.debug:
+                print(f"Debug depth {depth}: Cache HIT! Returning {cached_result}")
             return cached_result
         
-        winner = game.check_winner()
+        
         if winner is not None:
             if winner == 1: 
                 score = 1000 - depth     # Player 1 wins (prefer shorter paths to victory)
@@ -191,15 +176,25 @@ class UniversalMinimaxAgent(Agent):
             else:
                 score = 0                # Draw
             
-            # Cache the result
-            self.score_cache.put(state_key, score)
+            if self.debug:
+                print(f"Debug depth {depth}: Terminal state! Winner={winner}, Score={score}")
+            
+            # Cache the result for terminal states
+            if self.use_cache:
+                self.score_cache.put(state_key, score)
             return score
         
         # If we've reached maximum depth, use the game's heuristic evaluation
         if depth >= self.max_depth:
             score = game.evaluate_position()
-            self.score_cache.put(state_key, score)
+            if self.debug:
+                print(f"Debug depth {depth}: Max depth reached! Heuristic score={score}")
+            if self.use_cache:
+                self.score_cache.put(state_key, score)
             return score
+        
+        # Track if alpha-beta cutoff occurred
+        cutoff_occurred = False
         
         if maximizing_player:  # Player 1's turn, maximizing player
             max_eval = -float('inf')
@@ -210,12 +205,24 @@ class UniversalMinimaxAgent(Agent):
                 max_eval = max(max_eval, eval_score)
                 alpha = max(alpha, eval_score)
                 
+                if self.debug:
+                    print(f"Debug depth {depth}: Maximizing move {move}, score={eval_score}, max_eval={max_eval}")
+                
                 # Alpha-beta pruning: if beta <= alpha, we can stop evaluating
                 if beta <= alpha:
+                    if self.debug:
+                        print(f"Debug depth {depth}: Alpha-beta cutoff! beta={beta} <= alpha={alpha}")
+                    cutoff_occurred = True
                     break  # Beta cutoff
             
-            # Cache the result
-            self.score_cache.put(state_key, max_eval)
+            if self.debug:
+                print(f"Debug depth {depth}: Final maximizing result={max_eval}")
+            
+            # Cache intermediate results only if no cutoff occurred and bounds are wide enough
+            # This ensures we computed the true minimax value, not just a bound
+            if self.use_cache and not cutoff_occurred and (original_beta - original_alpha) >= 100:
+                self.score_cache.put(state_key, max_eval)
+            
             return max_eval
         else:  # Player -1's turn, minimizing player
             min_eval = float('inf')
@@ -226,27 +233,40 @@ class UniversalMinimaxAgent(Agent):
                 min_eval = min(min_eval, eval_score)
                 beta = min(beta, eval_score)
                 
+                if self.debug:
+                    print(f"Debug depth {depth}: Minimizing move {move}, score={eval_score}, min_eval={min_eval}")
+                
                 # Alpha-beta pruning: if beta <= alpha, we can stop evaluating
                 if beta <= alpha:
+                    if self.debug:
+                        print(f"Debug depth {depth}: Alpha-beta cutoff! beta={beta} <= alpha={alpha}")
+                    cutoff_occurred = True
                     break  # Alpha cutoff
             
-            # Cache the result
-            self.score_cache.put(state_key, min_eval)
+            if self.debug:
+                print(f"Debug depth {depth}: Final minimizing result={min_eval}")
+            
+            # Cache intermediate results only if no cutoff occurred and bounds are wide enough
+            if self.use_cache and not cutoff_occurred and (original_beta - original_alpha) >= 100:
+                self.score_cache.put(state_key, min_eval)
+            
             return min_eval
     
-    def _get_state_key(self, game, depth=0):
+    def _get_state_key(self, game, depth=0, include_depth=False):
         """
         Create a hashable representation of the game state using only the Game interface
         
         Args:
             game: Game object implementing the Game interface
-            depth: Current search depth
+            depth: Current search depth (only included if include_depth=True)
+            include_depth: Whether to include depth in the cache key
             
         Returns:
-            A tuple representing the game state, current player, and depth
+            A tuple representing the game state, current player, and optionally depth
         """
-        # Use the game's string representation as the state key
-        # This is the most universal approach since all games implement get_state_representation
-        state_str = game.get_state_representation()
+        state_str = game.get_key_for_cache()
         current_player = game.get_current_player()
-        return (state_str, current_player, depth)
+        if include_depth:
+            return (state_str, current_player, depth)
+        else:
+            return (state_str, current_player)

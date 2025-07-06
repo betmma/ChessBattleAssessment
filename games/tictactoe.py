@@ -122,6 +122,10 @@ class TicTacToeGame(Game):
             s += "  ".join(row_str_parts) + "\n" 
         return s.strip()
     
+    def get_key_for_cache(self) -> tuple:
+        """Get a unique key for caching game state"""
+        return tuple(self.board)
+    
     def get_chat_history_for_llm(self, llm: Agent) -> List[Dict[str, str]]:
         """Get prompt for agent describing current game state"""
         return super().get_chat_history_for_llm(llm)
@@ -215,13 +219,6 @@ class TicTacToeGame(Game):
     def clone(self):
         """Create a deep copy of the game"""
         return copy.deepcopy(self)
-    
-    def get_action_rewards(self) -> Dict[str, float]:
-        '''Use minimax agent to get rewards for each action'''
-        from agents.minimax_agent_tictactoe import MinimaxAgentTicTacToe
-        if not hasattr(TicTacToeGame, '_minimax_agent'):
-            TicTacToeGame._minimax_agent = MinimaxAgentTicTacToe()
-        return TicTacToeGame._minimax_agent.get_action_rewards(self)
     
     def load_state_from_representation(self, state_str: str) -> bool:
         """

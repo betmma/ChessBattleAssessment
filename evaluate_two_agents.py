@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from config import Config, setup_logging
-from games import TicTacToeGame, Connect4Game
+from games import GameByName
 from agents import RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
 from evaluation.evaluator import Evaluator
 from utils import create_agent
@@ -114,7 +114,7 @@ def main():
     # Run evaluation
     logger.info(f"Starting battle: {agent1.name} vs {agent2.name}")
     results = evaluator.evaluate_agent_vs_agent(
-        agent1, agent2, Connect4Game, config.NUM_EVAL_GAMES
+        agent1, agent2, GameByName('Nim'), config.NUM_EVAL_GAMES
     )
     
     # Print summary

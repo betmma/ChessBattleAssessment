@@ -8,7 +8,7 @@ from typing import Optional, List, Dict # Added List, Dict
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from config import Config, setup_logging
-from games import Game, TicTacToeGame, Connect4Game
+from games import GameByName, Games
 from agents import Agent, RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
 from utils import create_agent
 from evaluation.evaluator import Evaluator # Added import
@@ -55,7 +55,7 @@ def parse_args():
     
     # Game configuration
     parser.add_argument("--game", type=str, default="tictactoe",
-                        choices=["tictactoe", "connect4"],
+                        choices=Games.keys(),
                         help="Game to play")
     
     # Agent configuration
@@ -179,15 +179,7 @@ def main():
         return 1
     
     # Select game
-    if args.game == "tictactoe":
-        game_class = TicTacToeGame
-        print("Game: Tic Tac Toe")
-    elif args.game == "connect4":
-        game_class = Connect4Game
-        print("Game: Connect 4")
-    else:
-        print(f"Unknown game: {args.game}")
-        return 1
+    game_class = GameByName(args.game)
     
     print(f"Players: {human_player.name} vs {ai_agent.name}")
     

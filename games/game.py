@@ -18,7 +18,7 @@ class Game(ABC):
         self.system_prompt_no_thinking = None  # System prompt without thinking requirement
         self.user_prompt_template_no_thinking = None  # User prompt template without thinking
         self.empty_symbol = '.'  # Symbol for empty positions
-        self.name = self.__class__.__name__  # Default game name based on class name
+        self.name = self.__class__.__name__.removesuffix('Game')  # Default game name based on class name
     
     @abstractmethod
     def get_legal_moves(self) -> List[Any]:
@@ -48,6 +48,11 @@ class Game(ABC):
     @abstractmethod
     def get_board_representation_for_llm(self) -> str:
         """Get board state representation for LLM"""
+        pass
+    
+    @abstractmethod
+    def get_key_for_cache(self) -> tuple:
+        """Get a unique key for caching game state, without current player or game over state"""
         pass
     
     def get_state_representation(self) -> str:
@@ -130,16 +135,18 @@ class Game(ABC):
         """
         pass
     
-    @abstractmethod
     def get_action_rewards(self) -> Dict[str, float]:
         """
         Get reward values for every possible move from the current player's perspective for reinforcement learning.
-        Default implementation returns an empty dictionary.
+        Default implementation uses minimax agent.
         
-        Subclasses should override this method to provide specific rewards.
+        Subclasses should override this method if minimax is not suitable or if they have a custom implementation.
         """
-        return {}
-    
+        from agents.minimax_agent import MinimaxAgent
+        if not hasattr(self.__class__, '_minimax_agent'): # each class has an independent minimax agent, instead of each game instance
+            self.__class__._minimax_agent = MinimaxAgent()
+        return self.__class__._minimax_agent.get_action_rewards(self)
+
     @abstractmethod
     def evaluate_position(self) -> float:
         """

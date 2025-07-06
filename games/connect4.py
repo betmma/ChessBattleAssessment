@@ -162,6 +162,10 @@ class Connect4Game(Game):
         
         return s.strip()
     
+    def get_key_for_cache(self) -> tuple:
+        """Get a unique key for caching game state"""
+        return tuple(tuple(row) for row in self.board)
+    
     def get_chat_history_for_llm(self, llm: Agent) -> List[dict]:
         """Get prompt for agent describing current game state"""
         return super().get_chat_history_for_llm(llm)
@@ -303,13 +307,6 @@ class Connect4Game(Game):
     def clone(self):
         """Create a deep copy of the game"""
         return copy.deepcopy(self)
-    
-    def get_action_rewards(self) -> Dict[str, float]:
-        '''Use minimax agent to get rewards for each action'''
-        from agents.minimax_agent_connect4 import MinimaxAgentConnect4
-        if not hasattr(Connect4Game, '_minimax_agent'):
-            Connect4Game._minimax_agent = MinimaxAgentConnect4()
-        return Connect4Game._minimax_agent.get_action_rewards(self)
     
     def load_state_from_representation(self, state_str: str) -> bool:
         """
