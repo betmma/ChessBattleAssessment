@@ -5,8 +5,7 @@
 # export MASTER_PORT=51216 
 # accelerate launch --num_processes=2 train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
-os.environ['MASTER_PORT']='51218'
+os.environ["CUDA_VISIBLE_DEVICES"] = "3,4"
 import re
 import torch
 from datasets import load_dataset
@@ -19,9 +18,9 @@ directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
 model_path = "../../Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "../evaluation_results_vllm/grpo/grpo8_reformatted.jsonl"
+dataset_path = "../evaluation_results_vllm/grpo/3games_4_1600each.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/grpo8_connect4_qwen8b_strict_reformat"
+output_dir = "./outputs/3games_4_qwen8b_strict"
 
 os.makedirs(output_dir, exist_ok=True)
 logging.basicConfig(
@@ -79,7 +78,7 @@ model = get_peft_model(model, peft_config)
 
 # 4. Custom Reward Function
 invalidReward=-2000
-def connect4_reward_function(prompts, completions, completion_ids, **reward_kwargs):
+def connect4_reward_function(prompts, completions, task, **reward_kwargs):
     """
     Custom reward function for the Connect 4 environment.
 
@@ -107,17 +106,22 @@ def connect4_reward_function(prompts, completions, completion_ids, **reward_kwar
             reward = invalidReward
             thinkBegin=completion.count('<think>')
             thinkEnd=completion.count('</think>')
-            afterThink=completion.split('</think>')[-1]
-            # Extract the column number from the model's output (e.g., "[3]")
-            match = re.findall(r'\[(\d)\]', afterThink)
-            if thinkBegin==1 and thinkEnd==1 and match:
-                chosen_column = int(match[-1])
-                # The ground_truth for the i-th prompt is at index i
+            if thinkBegin==1 and thinkEnd==1:
+                afterThink=completion.split('</think>')[-1].strip().replace(' ','')
+                if re.match(r'\[\d\]',afterThink):
+                    # This is a valid completion format, e.g., "[0]"
+                    afterThink = afterThink[1:-1]
                 current_ground_truth = reward_kwargs['reward_model'][i]['ground_truth']
-                if 0 <= chosen_column < len(current_ground_truth):
-                    reward = float(current_ground_truth[chosen_column])
+                # seems that trl forces each ground_truth dict to contain all keys appeared in whole dataset, like this {'ground_truth': {'(0, 0)': None, '(0, 1)': -997.0, '(0, 2)': None, '(1, 0)': None, '(1, 1)': -997.0, '(1, 2)': None, '(2, 0)': None, '(2, 1)': 996.0, '(2, 2)': -997.0, '(1, 3)': None, '(3, 1)': None, '(3, 2)': None, '(3, 3)': None, '(0, 3)': None, '(0, 4)': None, '(0, 5)': None, '(0, 6)': None, '(0, 7)': None ... '0': None, '2': None, '4': None, '6': None, '1': None, '3': None, '5': None}}]} so need to remove None values
+                current_ground_truth = {k.replace(' ',''): v for k, v in current_ground_truth.items() if v is not None}
+                # print(current_ground_truth)
+                reward = current_ground_truth.get(afterThink, invalidReward)
+                logging.info(f"After think: {afterThink[:10]}, Reward Dict: {current_ground_truth}, Reward: {reward}")
+            else:
+                logging.warning(f"Invalid completion format for sample {i}.")
         except Exception as e:
             print(f"Error processing completion: '{completion}'. Error: {e}")
+            print(f'Reward kwargs: {reward_kwargs}')
             reward = invalidReward  # Assign a low reward for any processing error
         logging.info(f"Assigned Reward: {reward}\n")
         rewards.append(reward)
@@ -146,7 +150,7 @@ grpo_config = GRPOConfig(
     # --- vLLM Integration ---
     use_vllm=True,
     vllm_mode="server",
-    vllm_server_base_url="http://localhost:8003",
+    vllm_server_base_url="http://localhost:8002",
     # Adjust based on your GPU memory. 0.3 means 30% of GPU memory is allocated to vLLM.
     # The rest is used for training. You may need to tune this value.
     # vllm_gpu_memory_utilization=0.5,
