@@ -4,3 +4,4 @@ evaluation_results_vllm/
 myCheatSheet.txt
 grpo/outputs
 grpo/wandb
+debug/*

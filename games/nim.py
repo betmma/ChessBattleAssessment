@@ -246,7 +246,7 @@ class NimGame(Game):
         # 3. Multiple large piles: use standard Nim-sum but with caution near endgame
         else:
             nim_sum = 0
-            for pile in large_piles:
+            for pile in self.piles:
                 nim_sum ^= pile
             
             # In misère Nim, Nim-sum strategy applies until near the end
