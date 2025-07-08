@@ -5,7 +5,7 @@ from typing import List, Any, Optional, Tuple
 from games.board_game import BoardGame
 
 
-class Capture(BoardGame, board_size=(5, 5), move_arity=2):
+class CaptureGame(BoardGame, board_size=(5, 5), move_arity=2):
     """
     Capture is a 2-player board game on a 5x5 grid.
     - Players take turns placing their piece on an empty square.

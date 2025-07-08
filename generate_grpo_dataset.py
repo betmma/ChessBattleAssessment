@@ -109,8 +109,8 @@ def generate_dataset(input_file: str, output_file: str, max_depth: int = 4):
         print(f"\nTotal unique board states processed: {processed_count}")
 
 if __name__ == '__main__':
-    input_file = 'evaluation_results_vllm/game_logs/CONSOLIDATED_Minimax-random-0.2-depth-4_vs_Minimax-random-0.2-depth-4_20250707-090346.json'
-    output_file = 'evaluation_results_vllm/grpo/grpo4_dataset_2games.jsonl'
+    input_file = 'evaluation_results_vllm/game_logs/CONSOLIDATED_Minimax-random-0.0-depth-4_vs_Minimax-random-0.0-depth-4_20250708-230434.json'
+    output_file = 'evaluation_results_vllm/grpo/5games.jsonl'
     max_depth = 0
     
     if not os.path.exists(input_file):

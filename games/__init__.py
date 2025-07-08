@@ -7,8 +7,17 @@ from .game import Game
 from .tictactoe import TicTacToeGame
 from .connect4 import Connect4Game
 from .nim import NimGame
-from .boardGames.capture import Capture
-GamesList = [Connect4Game, TicTacToeGame,  NimGame, Capture]
+GamesList = [Connect4Game, TicTacToeGame, NimGame]
+
+# import all files under games/boardGames
+import os
+import pkgutil
+# Dynamically import all game modules in the boardGames package and add to GamesList
+board_games_path = os.path.dirname(__file__) + '/boardGames'
+for _, module_name, _ in pkgutil.iter_modules([board_games_path]):
+    module = __import__(f'games.boardGames.{module_name}', fromlist=[module_name])
+    GamesList.append(getattr(module, f'{module_name.capitalize()}Game'))
+
 Games = {game.__name__.removesuffix('Game'): game for game in GamesList}
 def GameByName(name: str) -> Game:
     """
@@ -32,7 +41,6 @@ __all__ = [
     'TicTacToeGame',
     'Connect4Game',
     'NimGame',
-    'Capture',
     'Game',
     'Games',
     'GameByName',
