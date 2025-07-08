@@ -41,7 +41,7 @@ class LRUCache:
 class UniversalMinimaxAgent(Agent):
     """Universal Minimax agent that works with any game implementing the Game interface"""
     
-    def __init__(self, name: str = "UniversalMinimax", max_depth: int = 4, debug: bool = False):
+    def __init__(self, name: str = "UniversalMinimax", max_depth: int = 4, debug: bool = False, same_return_random: bool = True):
         super().__init__(name)
         # Calculate cache size based on available memory
         cache_size = self._calculate_cache_size()
@@ -52,6 +52,8 @@ class UniversalMinimaxAgent(Agent):
         self.debug = debug
         # Option to disable caching for debugging
         self.use_cache = True
+        # Option to return random move if multiple moves have the same score
+        self.same_return_random = same_return_random
     
     def set_debug_mode(self, debug: bool):
         """Enable or disable debug mode"""
@@ -89,6 +91,16 @@ class UniversalMinimaxAgent(Agent):
             str: Best move as string
         """
         rewards = self.get_action_rewards(game)
+        if self.same_return_random:
+            best_moves,best_reward=[], None
+            for move, reward in rewards.items():
+                if best_reward is None or reward > best_reward:
+                    best_moves = [move]
+                    best_reward = reward
+                elif reward == best_reward:
+                    best_moves.append(move)
+            if best_moves:
+                return random.choice(best_moves)
         best_move = max(rewards, key=rewards.get, default=None)
         return str(best_move)
     
