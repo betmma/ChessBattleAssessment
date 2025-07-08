@@ -17,6 +17,33 @@ class NimGame(Game):
     Players take turns removing stones from any single pile.
     The player who takes the last stone loses.
     """
+    system_prompt = (
+        "You are playing Nim. In this game, there are multiple piles of stones. "
+        "On your turn, you must remove one or more stones from exactly ONE pile. "
+        "The player who takes the LAST stone LOSES the game. "
+        "After your thinking, provide your move as (pile_index, stones_to_remove). "
+        "Example: To remove 2 stones from pile 0, respond with `(0,2)`. "
+        "Your response format: `<think>Your reasoning...</think>(pile_index,stones_to_remove)`"
+    )
+    user_prompt_template = (
+        "{board_representation}\n"
+        "You are player '{player_symbol}'.\n"
+        "Your available legal moves: [{legal_moves_str}]\n"
+        "Provide your thinking and final move in the format: `<think>...</think>(pile_index,stones_to_remove)`"
+    )
+    system_prompt_no_thinking = (
+        "You are playing Nim. Remove stones from exactly ONE pile on your turn. "
+        "The player who takes the LAST stone LOSES. "
+        "Your response MUST be your chosen move as (pile_index, stones_to_remove). "
+        "Example: To remove 2 stones from pile 0, respond with `(0,2)`. "
+        "Do not add any other text or explanation."
+    )
+    user_prompt_template_no_thinking = (
+        "{board_representation}\n"
+        "You are player '{player_symbol}'.\n"
+        "Your available legal moves: [{legal_moves_str}]\n"
+        "Choose your move (e.g., `(0,2)` to remove 2 stones from pile 0):"
+    )
     
     def __init__(self, piles: List[int] = None):
         super().__init__()
@@ -26,45 +53,13 @@ class NimGame(Game):
         self.player_1_symbol = 'P1'
         self.player_2_symbol = 'P2'
         self._game_over_forced_forfeit = False
-        self._setup_default_prompt()
         
     def _random_init_(self):
         """Randomly initialize the game state"""
         import random
-        return [random.randint(1, 5) for _ in range(3)]
+        return [random.randint(1, 7) for _ in range(random.randint(3, 4))]
         
-    def _setup_default_prompt(self):
-        """Set default prompt template"""
-        self.system_prompt = (
-            "You are playing Nim. In this game, there are multiple piles of stones. "
-            "On your turn, you must remove one or more stones from exactly ONE pile. "
-            "The player who takes the LAST stone LOSES the game. "
-            # "Think strategically about the Nim-sum (XOR of all pile sizes) to find the optimal move. "
-            "After your thinking, provide your move as (pile_index, stones_to_remove). "
-            "Example: To remove 2 stones from pile 0, respond with `(0,2)`. "
-            "Your response format: `<think>Your reasoning...</think>(pile_index,stones_to_remove)`"
-        )
-        self.user_prompt_template = (
-            "{board_representation}\n"
-            "You are player '{player_symbol}'.\n"
-            "Your available legal moves: [{legal_moves_str}]\n"
-            "Provide your thinking and final move in the format: `<think>...</think>(pile_index,stones_to_remove)`"
-        )
-        self.system_prompt_no_thinking = (
-            "You are playing Nim. Remove stones from exactly ONE pile on your turn. "
-            "The player who takes the LAST stone LOSES. "
-            "Your response MUST be your chosen move as (pile_index, stones_to_remove). "
-            "Example: To remove 2 stones from pile 0, respond with `(0,2)`. "
-            "Do not add any other text or explanation."
-        )
-        self.user_prompt_template_no_thinking = (
-            "{board_representation}\n"
-            "You are player '{player_symbol}'.\n"
-            "Your available legal moves: [{legal_moves_str}]\n"
-            "Choose your move (e.g., `(0,2)` to remove 2 stones from pile 0):"
-        )
-    
-    def get_player_symbol(self, player_value):
+    def _get_player_symbol(self, player_value):
         """Get the symbol representation for a player"""
         if player_value == 1: 
             return self.player_1_symbol
@@ -154,9 +149,6 @@ class NimGame(Game):
                     new_piles.append(int(match.group(1)))
                 else:
                     return False
-            
-            if len(new_piles) != len(self.piles):
-                return False
             
             self.piles = new_piles
             
