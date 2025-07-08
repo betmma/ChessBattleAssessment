@@ -4,6 +4,16 @@ from typing import List, Tuple, Optional, Any, Dict
 class Game(ABC):
     """Base abstract class for all games. All game implementations must inherit from this."""
     
+    system_prompt = None  # System prompt for LLM
+    # User prompt template for LLM. example:
+    #    ("{board_representation}\n"
+    #     "You are player '{player_symbol}'.\n"
+    #     "Your available legal moves (columns): [{legal_moves_str}]\n"
+    #     "Provide your thinking and final move in the specified format: `(column_number)`")
+    user_prompt_template = None
+    system_prompt_no_thinking = None  # System prompt without thinking requirement
+    user_prompt_template_no_thinking = None  # User prompt template without thinking
+    
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls.name = cls.__name__.removesuffix('Game')
@@ -12,15 +22,6 @@ class Game(ABC):
         """Initialize common game attributes"""
         self.current_player = 1  # Current player identifier
         self._game_over_forced_forfeit = False  # For forcing game end in evaluation
-        self.system_prompt = None  # System prompt for LLM
-        # User prompt template for LLM. example:
-        #    ("{board_representation}\n"
-        #     "You are player '{player_symbol}'.\n"
-        #     "Your available legal moves (columns): [{legal_moves_str}]\n"
-        #     "Provide your thinking and final move in the specified format: `(column_number)`")
-        self.user_prompt_template = None
-        self.system_prompt_no_thinking = None  # System prompt without thinking requirement
-        self.user_prompt_template_no_thinking = None  # User prompt template without thinking
         self.empty_symbol = '.'  # Symbol for empty positions
         self.name = self.__class__.name  # Default game name based on class name
     
@@ -63,7 +64,7 @@ class Game(ABC):
         """Get a string representation of game state, for display or debugging"""
         # Use the LLM representation as base and add metadata
         board_repr = self.get_board_representation_for_llm()
-        current_player_symbol = self.get_player_symbol(self.current_player)
+        current_player_symbol = self._get_player_symbol(self.current_player)
         legal_moves = self.get_legal_moves()
         
         state_str = board_repr + "\n"
@@ -86,7 +87,7 @@ class Game(ABC):
         pass
     
     @abstractmethod
-    def get_player_symbol(self, player_value: Any) -> str:
+    def _get_player_symbol(self, player_value: Any) -> str:
         """Get the symbol representation for a player"""
         pass
     
@@ -95,7 +96,7 @@ class Game(ABC):
         from agents.vllm_agent import VLLMAgent
         
         board_representation = self.get_board_representation_for_llm()
-        player_symbol = self.get_player_symbol(self.current_player)
+        player_symbol = self._get_player_symbol(self.current_player)
         legal_moves = self.get_legal_moves()
         legal_moves_str = self._format_legal_moves_for_prompt(legal_moves)
         

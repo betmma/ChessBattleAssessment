@@ -13,7 +13,32 @@ from games.game import Game
 
 class TicTacToeGame(Game):
     """Tic-Tac-Toe game implementation"""
-    
+    system_prompt = (
+        "You are an expert Tic-Tac-Toe player. Your task is to choose the best move. "
+        "First, think *briefly and concisely* about the current board state inside a `<think>` block. Your thinking should be a few sentences at most. "
+        "After your thinking block, you MUST provide your chosen move as a (row,col) coordinate pair. "
+        "Your entire response should follow this format: `<think>Your reasoning here...</think>(row,col). "
+        "Do not add any other text outside this structure."
+    )
+    user_prompt_template = (
+        "{board_representation}\n"
+        "You are player '{player_symbol}'.\n"
+        "Your available legal moves (row,col format): [{legal_moves_str}]\n"
+        "Provide your thinking and final move in the specified format: `<think>...</think>(r,c)`"
+    )
+    system_prompt_no_thinking = (
+        "You are playing Tic-Tac-Toe. Your task is to select the BEST move from the available legal moves. "
+        "Your response MUST be your chosen (row,col) coordinate, enclosed in square brackets. "
+        "Example: If you want to play on row 1, column 2, your output should be `[1,2]`. "
+        "Do not add any other text or explanation."
+    )
+    user_prompt_template_no_thinking = (
+        "{board_representation}\n"
+        "You are player '{player_symbol}'.\n"
+        "Your available legal moves (row,col format): [{legal_moves_str}]\n"
+        "Choose your move by selecting one of the available (row,col) pairs. Your move (e.g., `[1,2]` for row 1, column 2):"
+    )
+
     def __init__(self):
         super().__init__()
         self.board = [0] * 9  # 0: empty, 1: Player X, -1: Player O
@@ -21,36 +46,7 @@ class TicTacToeGame(Game):
         self.player_O_symbol = 'O'
         self._game_over_forced_forfeit = False  # For forcing game end in evaluation
         self.prompt_template = None  # For dynamic prompt updates
-        self._setup_default_prompt()
         
-    def _setup_default_prompt(self):
-        """Set default prompt template"""
-        self.system_prompt = (
-            "You are an expert Tic-Tac-Toe player. Your task is to choose the best move. "
-            "First, think *briefly and concisely* about the current board state inside a `<think>` block. Your thinking should be a few sentences at most. "
-            "After your thinking block, you MUST provide your chosen move as a (row,col) coordinate pair. "
-            "Your entire response should follow this format: `<think>Your reasoning here...</think>(row,col). "
-            "Do not add any other text outside this structure."
-        )
-        self.user_prompt_template = (
-            "{board_representation}\n"
-            "You are player '{player_symbol}'.\n"
-            "Your available legal moves (row,col format): [{legal_moves_str}]\n"
-            "Provide your thinking and final move in the specified format: `<think>...</think>(r,c)`"
-        )
-        self.system_prompt_no_thinking = (
-            "You are playing Tic-Tac-Toe. Your task is to select the BEST move from the available legal moves. "
-            "Your response MUST be your chosen (row,col) coordinate, enclosed in square brackets. "
-            "Example: If you want to play on row 1, column 2, your output should be `[1,2]`. "
-            "Do not add any other text or explanation."
-        )
-        self.user_prompt_template_no_thinking = (
-            "{board_representation}\n"
-            "You are player '{player_symbol}'.\n"
-            "Your available legal moves (row,col format): [{legal_moves_str}]\n"
-            "Choose your move by selecting one of the available (row,col) pairs. Your move (e.g., `[1,2]` for row 1, column 2):"
-        )
-    
     def update_prompt(self, system_prompt=None, user_prompt_template=None):
         """Allow updating prompt templates"""
         if system_prompt:
@@ -58,7 +54,7 @@ class TicTacToeGame(Game):
         if user_prompt_template:
             self.user_prompt_template = user_prompt_template
     
-    def get_player_symbol(self, player_value):
+    def _get_player_symbol(self, player_value):
         """Get the symbol representation for a player"""
         if player_value == 1: 
             return self.player_X_symbol
@@ -117,7 +113,7 @@ class TicTacToeGame(Game):
             row_str_parts = []
             for c in range(3):
                 idx = r * 3 + c
-                symbol = self.get_player_symbol(self.board[idx])
+                symbol = self._get_player_symbol(self.board[idx])
                 row_str_parts.append(f"({r},{c}):\"{symbol}\"")
             s += "  ".join(row_str_parts) + "\n" 
         return s.strip()

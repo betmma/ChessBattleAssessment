@@ -10,7 +10,7 @@ class Config:
     VLLM_MAX_MODEL_LEN = 2048  # Max length of the model context
     VLLM_GPU_MEMORY_UTILIZATION = 0.9  # GPU memory utilization for vLLM
     
-    MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
+    MAX_CONCURRENT_GAMES = 1  # How many games to process in parallel logic stages
     
     # Evaluation Settings
     NUM_EVAL_GAMES = 50  # Default number of games to evaluate

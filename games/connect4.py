@@ -13,6 +13,29 @@ from games.game import Game
 
 class Connect4Game(Game):
     """Connect 4 game implementation"""
+    system_prompt = (
+        "You are an expert Connect 4 player. Your task is to choose the best column to drop your piece. "
+        "Your thinking should be a few sentences at most. "
+        "After your thinking block, you MUST provide your chosen column number (0-6), enclosed in square brackets. "
+    )
+    user_prompt_template = (
+        "{board_representation}\n"
+        "You are player '{player_symbol}'.\n"
+        "Your available legal moves (columns): [{legal_moves_str}]\n"
+        "Provide your thinking and final move in the specified format: `[column_number]`"
+    )
+    system_prompt_no_thinking = (
+        "You are playing Connect 4. Your task is to select the BEST column to drop your piece from the available legal moves. "
+        "Your response MUST be your chosen column number (0-6), enclosed in square brackets. "
+        "Example: If you want to drop in column 3, your output should be `[3]`. "
+        "Do not add any other text or explanation."
+    )
+    user_prompt_template_no_thinking = (
+        "{board_representation}\n"
+        "You are player '{player_symbol}'.\n"
+        "Your available legal moves (columns): [{legal_moves_str}]\n"
+        "Choose your move by selecting one of the available column numbers. Your move (e.g., `[3]` for column 3):"
+    )
     
     def __init__(self):
         super().__init__()
@@ -21,34 +44,7 @@ class Connect4Game(Game):
         self.board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
         self.player_1_symbol = 'R'  # Red
         self.player_2_symbol = 'Y'  # Yellow
-        self._setup_default_prompt()
         
-    def _setup_default_prompt(self):
-        """Set default prompt template"""
-        self.system_prompt = (
-            "You are an expert Connect 4 player. Your task is to choose the best column to drop your piece. "
-            "Your thinking should be a few sentences at most. "
-            "After your thinking block, you MUST provide your chosen column number (0-6), enclosed in square brackets. "
-        )
-        self.user_prompt_template = (
-            "{board_representation}\n"
-            "You are player '{player_symbol}'.\n"
-            "Your available legal moves (columns): [{legal_moves_str}]\n"
-            "Provide your thinking and final move in the specified format: `[column_number]`"
-        )
-        self.system_prompt_no_thinking = (
-            "You are playing Connect 4. Your task is to select the BEST column to drop your piece from the available legal moves. "
-            "Your response MUST be your chosen column number (0-6), enclosed in square brackets. "
-            "Example: If you want to drop in column 3, your output should be `[3]`. "
-            "Do not add any other text or explanation."
-        )
-        self.user_prompt_template_no_thinking = (
-            "{board_representation}\n"
-            "You are player '{player_symbol}'.\n"
-            "Your available legal moves (columns): [{legal_moves_str}]\n"
-            "Choose your move by selecting one of the available column numbers. Your move (e.g., `[3]` for column 3):"
-        )
-    
     def update_prompt(self, system_prompt=None, user_prompt_template=None):
         """Allow updating prompt templates"""
         if system_prompt:
@@ -56,7 +52,7 @@ class Connect4Game(Game):
         if user_prompt_template:
             self.user_prompt_template = user_prompt_template
     
-    def get_player_symbol(self, player_value):
+    def _get_player_symbol(self, player_value):
         """Get the symbol representation for a player"""
         if player_value == 1: 
             return self.player_1_symbol
@@ -142,7 +138,7 @@ class Connect4Game(Game):
         for row in range(self.rows):
             row_parts = []
             for col in range(self.cols):
-                symbol = self.get_player_symbol(self.board[row][col])
+                symbol = self._get_player_symbol(self.board[row][col])
                 row_parts.append(f"{symbol}")
             s += "         " + " ".join(row_parts) + "\n"
         
@@ -155,7 +151,7 @@ class Connect4Game(Game):
         for row in range(self.rows):
             row_parts = []
             for col in range(self.cols):
-                symbol = self.get_player_symbol(self.board[row][col])
+                symbol = self._get_player_symbol(self.board[row][col])
                 coord_str = f"({row},{col}): {symbol}"
                 row_parts.append(coord_str)
             s += ", ".join(row_parts) + "\n"

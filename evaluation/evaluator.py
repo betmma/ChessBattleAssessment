@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
 from tqdm import tqdm
+from utils import safe_json_dump
 
 import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -151,7 +152,7 @@ class EvaluationLogger:
         log_filename = f"{self.agent1_name}_vs_{self.agent2_name}_{self.game_class_name}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
         game_log_path = os.path.join(log_dir, log_filename)
         with open(game_log_path, 'w') as f:
-            json.dump(self.game_logs_data, f, indent=2)
+            safe_json_dump(self.game_logs_data, f, indent=2, ensure_ascii=False)
         logging.info(f"Detailed game logs saved to {game_log_path}")
         return game_log_path
 
@@ -503,7 +504,7 @@ class ConsolidatedLogger:
         }
         
         with open(game_log_path, 'w') as f:
-            json.dump(final_data, f, indent=2)
+            safe_json_dump(final_data, f, indent=2, ensure_ascii=False)
         
         logging.info(f"Consolidated game logs saved to {game_log_path}")
         return game_log_path
