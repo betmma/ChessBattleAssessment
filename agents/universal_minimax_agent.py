@@ -115,6 +115,7 @@ class UniversalMinimaxAgent(Agent):
         Returns:
             A dictionary mapping each legal move (as a string) to its minimax score.
         """
+        from utils.safe_json_dump import clean_np_types
         player_value = game.get_current_player()
         legal_moves = game.get_legal_moves()
         rewards = {}
@@ -136,7 +137,7 @@ class UniversalMinimaxAgent(Agent):
             # If current player is 1, reward is the score.
             # If current player is -1, reward is the negative of the score.
             reward = score if player_value == 1 else -score
-            rewards[str(move)] = reward
+            rewards[str(clean_np_types(move))] = reward
 
         return rewards
     
