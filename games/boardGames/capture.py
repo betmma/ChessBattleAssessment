@@ -26,7 +26,7 @@ class CaptureGame(BoardGame, board_size=(5, 5), move_arity=2):
     For example, (0, 0) is the top-left corner, and (4, 4) is the bottom-right corner.
     """
 
-    def get_legal_moves(self) -> List[Any]:
+    def _get_legal_moves(self) -> List[Any]:
         """Return all currently legal moves."""
         moves = []
         for r in range(self.board_size[0]):

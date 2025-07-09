@@ -74,7 +74,7 @@ class UniversalMinimaxAgent(Agent):
             # Get available memory in bytes
             available_memory = psutil.virtual_memory().available
             # Use 5% of available memory for cache, assuming ~100 bytes per cache entry
-            cache_size = min(max(1000, available_memory // (100 * 20)), 50000)
+            cache_size = min(max(1000, available_memory // (100 * 20)), 50000000)
             return cache_size
         except:
             # Fallback to conservative size if psutil fails

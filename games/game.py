@@ -63,9 +63,10 @@ class Game(ABC):
     def get_state_representation(self) -> str:
         """Get a string representation of game state, for display or debugging"""
         # Use the LLM representation as base and add metadata
+        from utils import clean_np_types
         board_repr = self.get_board_representation_for_llm()
         current_player_symbol = self._get_player_symbol(self.current_player)
-        legal_moves = self.get_legal_moves()
+        legal_moves = clean_np_types(self.get_legal_moves())
         
         state_str = board_repr + "\n"
         state_str += f"Current turn: {current_player_symbol} (plays as {self.current_player})\n"

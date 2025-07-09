@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from typing import List, Any, Optional, Tuple
-import re
 import numpy as np
+import re
 from games.game import Game
 
 class BoardGame(Game):
@@ -60,6 +60,9 @@ class BoardGame(Game):
     
     def get_board_representation_for_llm(self) -> str:
         """Returns a string representation of the board for the LLM."""
+        if self.board.ndim == 1:
+            # 1D board representation
+            return " ".join([self.player_symbols.get(cell, str(cell)) for cell in self.board])
         return "\n".join([" ".join([self.player_symbols.get(cell, str(cell)) for cell in row]) for row in self.board])
 
     def get_key_for_cache(self) -> tuple:
@@ -172,12 +175,18 @@ class BoardGame(Game):
         """
         return 0.0
 
+    def get_legal_moves(self) -> List[Any]:
+        """Return all currently legal moves, with numpy types cleaned."""
+        from utils.safe_json_dump import clean_np_types
+        moves = self._get_legal_moves()
+        return clean_np_types(moves)
+
     # ----------------------------------------------------------------
     # Abstract methods to be implemented by specific board game classes
     # ----------------------------------------------------------------
 
     @abstractmethod
-    def get_legal_moves(self) -> List[Any]:
+    def _get_legal_moves(self) -> List[Any]:
         """Return all currently legal moves."""
         pass
 

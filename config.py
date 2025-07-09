@@ -10,15 +10,15 @@ class Config:
     VLLM_MAX_MODEL_LEN = 2048  # Max length of the model context
     VLLM_GPU_MEMORY_UTILIZATION = 0.9  # GPU memory utilization for vLLM
     
-    MAX_CONCURRENT_GAMES = 1  # How many games to process in parallel logic stages
+    MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
     
     # Evaluation Settings
     NUM_EVAL_GAMES = 50  # Default number of games to evaluate
     
     # Generation Settings
-    MAX_PROMPT_LENGTH = 512  # Max length for tokenizer context for prompts
-    MAX_GENERATION_LENGTH = 1024  # Max new tokens for LLM to generate for a move
-    TEMPERATURE = 0.1
+    MAX_PROMPT_LENGTH = 1024  # Max length for tokenizer context for prompts
+    MAX_GENERATION_LENGTH = 4096  # Max new tokens for LLM to generate for a move
+    TEMPERATURE = 0.6
     TOP_P = 0.95
     LOCAL_ENABLE_THINKING = True  # Enable thinking for local agents
     

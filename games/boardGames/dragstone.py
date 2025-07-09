@@ -52,7 +52,7 @@ class DragstoneGame(BoardGame, board_size=(5, 5), move_arity=4):
         self.board[1, 0] = -1
         self.board[1, 4] = -1
     
-    def get_legal_moves(self) -> List[Tuple[int, int, int, int]]:
+    def _get_legal_moves(self) -> List[Tuple[int, int, int, int]]:
         """Return all legal drag moves for current player."""
         legal_moves = []
         
