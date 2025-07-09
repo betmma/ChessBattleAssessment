@@ -10,7 +10,6 @@ import re
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, BertTokenizer, BitsAndBytesConfig
-from trl import GRPOTrainer, GRPOConfig
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import logging,datetime
 
@@ -20,7 +19,7 @@ model_path = "../../Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
 dataset_path = "../evaluation_results_vllm/grpo/3games_4_1600each.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/3games_4_qwen8b_strict"
+output_dir = "./outputs/3games_4_qwen8b_strict_4096_2"
 
 os.makedirs(output_dir, exist_ok=True)
 logging.basicConfig(
@@ -29,6 +28,23 @@ logging.basicConfig(
     filename=os.path.join(output_dir, f"evaluation_log_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"),
     filemode='w'
 )
+
+CHECK_AFTER_APPLY_CHAT_TEMPLATE = True
+if CHECK_AFTER_APPLY_CHAT_TEMPLATE:
+    import trl.data_utils
+    # log raw text after applying chat template
+    def maybe_apply_chat_template(
+        example: dict[str, list[dict[str, str]]],
+        tokenizer,
+        tools= None,
+    ) -> dict[str, str]:
+        if trl.data_utils.is_conversational(example):
+            ret= trl.data_utils.apply_chat_template(example, tokenizer, tools)
+            logging.info(f"After applying chat template:\n----------------------\n{ret}")
+            return ret
+        else:
+            return example
+    trl.data_utils.maybe_apply_chat_template=maybe_apply_chat_template
 # 2. Load Dataset
 try:
     dataset = load_dataset("json", data_files=dataset_path, split="train")
@@ -78,7 +94,7 @@ model = get_peft_model(model, peft_config)
 
 # 4. Custom Reward Function
 invalidReward=-2000
-def connect4_reward_function(prompts, completions, task, **reward_kwargs):
+def connect4_reward_function(prompts, completions, completion_ids, **reward_kwargs):
     """
     Custom reward function for the Connect 4 environment.
 
@@ -128,13 +144,14 @@ def connect4_reward_function(prompts, completions, task, **reward_kwargs):
     return rewards
 
 # 5. GRPO Configuration with vLLM
+from trl import GRPOTrainer, GRPOConfig
 grpo_config = GRPOConfig(
     output_dir=output_dir,
     num_train_epochs=5,
-    per_device_train_batch_size=3, # 
+    per_device_train_batch_size=1, # 
     gradient_accumulation_steps=8,
     learning_rate=2e-6,
-    num_generations=8,  # batch 4, num 8, completion 1024, 79gb; 2-8-1024-
+    num_generations=8,  # batch 4, num 8, prompt 512, completion 1024, 79gb; 3-8-512-1024- 66gb; 1-8-1024-4096-72gb
     logging_steps=10,
     save_steps=100,
     report_to="wandb",
@@ -142,15 +159,15 @@ grpo_config = GRPOConfig(
     remove_unused_columns=False, # Keep 'reward_model' column for the reward function
 
     # Key change: max_length is removed. Use max_prompt_length and max_completion_length
-    max_prompt_length=512,
-    max_completion_length=1024,
+    max_prompt_length=1024,
+    max_completion_length=4096,
 
-    generation_kwargs={'max_tokens': 1024},
+    generation_kwargs={'max_tokens': 4096},
     
     # --- vLLM Integration ---
     use_vllm=True,
     vllm_mode="server",
-    vllm_server_base_url="http://localhost:8002",
+    vllm_server_base_url="http://localhost:8004",
     # Adjust based on your GPU memory. 0.3 means 30% of GPU memory is allocated to vLLM.
     # The rest is used for training. You may need to tune this value.
     # vllm_gpu_memory_utilization=0.5,

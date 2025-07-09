@@ -7,7 +7,7 @@ class Config:
     VLLM_TENSOR_PARALLEL_SIZE = 1
     VLLM_MAX_NUM_SEQS = 4096
     VLLM_MAX_NUM_BATCHED_TOKENS = 16384
-    VLLM_MAX_MODEL_LEN = 2048  # Max length of the model context
+    VLLM_MAX_MODEL_LEN = 16384  # Max length of the model context
     VLLM_GPU_MEMORY_UTILIZATION = 0.9  # GPU memory utilization for vLLM
     
     MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
@@ -17,7 +17,7 @@ class Config:
     
     # Generation Settings
     MAX_PROMPT_LENGTH = 1024  # Max length for tokenizer context for prompts
-    MAX_GENERATION_LENGTH = 4096  # Max new tokens for LLM to generate for a move
+    MAX_GENERATION_LENGTH = 16384  # Max new tokens for LLM to generate for a move
     TEMPERATURE = 0.6
     TOP_P = 0.95
     LOCAL_ENABLE_THINKING = True  # Enable thinking for local agents

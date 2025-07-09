@@ -85,6 +85,8 @@ def generate_dataset(input_file: str, output_file: str, max_depth: int = 4):
                             print(f"Warning: Failed to get action rewards for {game_name}: {e}")
                             continue
                         
+                        if not filter_rewards(action_rewards): continue
+                        
                         # Get the prompts
                         try:
                             prompts = game.get_chat_history_for_llm(minimax_agent)
@@ -108,9 +110,21 @@ def generate_dataset(input_file: str, output_file: str, max_depth: int = 4):
         
         print(f"\nTotal unique board states processed: {processed_count}")
 
+def filter_rewards(action_rewards):
+    """
+    Filters out good rewards 
+    """
+    reward_values=list(action_rewards.values())
+    win_in_n_threshold=990
+    if (any(i>win_in_n_threshold for i in reward_values) or any(i<-win_in_n_threshold for i in reward_values)) and not all(i==reward_values[0] for i in reward_values):
+        # If there is a win/lose in n moves, and not all rewards are the same
+        return True
+
+    return False
+
 if __name__ == '__main__':
-    input_file = 'evaluation_results_vllm/game_logs/CONSOLIDATED_Minimax-random-0.0-depth-4_vs_Minimax-random-0.0-depth-4_20250708-230434.json'
-    output_file = 'evaluation_results_vllm/grpo/5games.jsonl'
+    input_file = 'evaluation_results_vllm/game_logs/CONSOLIDATED_Minimax-random-0.2-depth-4_vs_Minimax-random-0.2-depth-4_20250707-090346.json'
+    output_file = 'evaluation_results_vllm/grpo/grpo4_dataset_ttt_nimq.jsonl'
     max_depth = 0
     
     if not os.path.exists(input_file):

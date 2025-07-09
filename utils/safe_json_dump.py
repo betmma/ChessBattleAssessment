@@ -12,6 +12,8 @@ def clean_np_types(obj):
         return {k: clean_np_types(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [clean_np_types(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(clean_np_types(item) for item in obj)
     else:
         return obj
 def safe_json_dump(obj, *args, **kwargs):
