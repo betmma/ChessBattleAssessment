@@ -316,7 +316,7 @@ class GameRunner:
             else:
                 result_status = "retry"
         else:
-            parsed_move = game.parse_move_from_output(str(move_input), game.get_legal_moves())
+            parsed_move = game.parse_move_from_output(str(move_input))
             if parsed_move is not None:
                 is_valid_move = game.make_move(parsed_move) # This applies the move
             

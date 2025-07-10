@@ -130,7 +130,7 @@ class TicTacToeGame(Game):
         """Format legal moves for TicTacToe as (row,col) pairs"""
         return ", ".join([f"({r},{c})" for r, c in legal_moves])
     
-    def parse_move_from_output(self, raw_output: str, legal_moves: List[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
+    def parse_move_from_output(self, raw_output: str) -> Optional[Tuple[int, int]]:
         """
         Parse move from LLM output for Tic-Tac-Toe
         
@@ -148,11 +148,7 @@ class TicTacToeGame(Game):
         if match:
             last_match = match[-1]
             move_coord = (int(last_match[0]), int(last_match[1]))
-            if move_coord in legal_moves:
-                return move_coord
-            else:
-                logging.warning(f"LLM chose illegal move {move_coord} (not in {legal_moves}). Raw: '{raw_output}'")
-                return None
+            return move_coord
         else:
             logging.warning(f"LLM output format incorrect: '{raw_output}'")
             return None

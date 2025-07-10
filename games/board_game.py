@@ -123,11 +123,13 @@ class BoardGame(Game):
         """Returns the symbol for a given player."""
         return self.player_symbols.get(player_value, '?')
 
-    def parse_move_from_output(self, raw_output: str, legal_moves: List[Any]) -> Optional[Any]:
+    def parse_move_from_output(self, raw_output: str) -> Optional[Any]:
         """Parses a move from the raw output of an agent, enforcing move arity."""
         # Regex to find tuples of numbers, e.g., (1, 2) or (3)
         pattern = r'\((' + r'\s*\d+\s*,' * (self.move_arity - 1) + r'\s*\d+\s*' + r')\)' if self.move_arity > 1 else r'\(\s*\d+\s*\)'
-        match = re.search(pattern, raw_output)
+        match = None
+        for next_match in re.finditer(pattern, raw_output):
+            match = next_match
         
         if match:
             try:
@@ -138,7 +140,7 @@ class BoardGame(Game):
                 if isinstance(move_tuple, int) and self.move_arity == 1:
                     move_tuple = (move_tuple,)
 
-                if isinstance(move_tuple, tuple) and len(move_tuple) == self.move_arity and move_tuple in legal_moves:
+                if isinstance(move_tuple, tuple) and len(move_tuple) == self.move_arity:
                     return move_tuple
             except:
                 return None

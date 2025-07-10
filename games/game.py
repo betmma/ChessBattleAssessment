@@ -124,8 +124,8 @@ class Game(ABC):
         return ", ".join([str(move) for move in legal_moves])
     
     @abstractmethod
-    def parse_move_from_output(self, raw_output: str, legal_moves: List[Any]) -> Optional[Any]:
-        """Parse a move from an agent's output string, validating against legal moves"""
+    def parse_move_from_output(self, raw_output: str) -> Optional[Any]:
+        """Parse a move from an agent's output string"""
         pass
     
     @abstractmethod

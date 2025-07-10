@@ -5,3 +5,5 @@ myCheatSheet.txt
 grpo/outputs
 grpo/wandb
 debug/*
+unsloth_compiled_cache/
+*.lock

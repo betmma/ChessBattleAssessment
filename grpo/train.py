@@ -5,7 +5,7 @@
 # export MASTER_PORT=51216 
 # accelerate launch --num_processes=2 train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3,4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
 import re
 import torch
 from datasets import load_dataset
@@ -17,9 +17,9 @@ directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
 model_path = "../../Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "../evaluation_results_vllm/grpo/3games_4_1600each.jsonl"
+dataset_path = "../evaluation_results_vllm/grpo/5games_4_filtered.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/3games_4_qwen8b_strict_4096_2"
+output_dir = "./outputs/5games_4_qwen8b_strict_8192"
 
 os.makedirs(output_dir, exist_ok=True)
 logging.basicConfig(
@@ -151,7 +151,7 @@ grpo_config = GRPOConfig(
     per_device_train_batch_size=1, # 
     gradient_accumulation_steps=8,
     learning_rate=2e-6,
-    num_generations=8,  # batch 4, num 8, prompt 512, completion 1024, 79gb; 3-8-512-1024- 66gb; 1-8-1024-4096-72gb
+    num_generations=4,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb
     logging_steps=10,
     save_steps=100,
     report_to="wandb",
@@ -163,6 +163,8 @@ grpo_config = GRPOConfig(
     max_completion_length=4096,
 
     generation_kwargs={'max_tokens': 4096},
+    
+    # use_liger_loss=True, # this slightly increases memory usage (^^;
     
     # --- vLLM Integration ---
     use_vllm=True,

@@ -35,7 +35,7 @@ class HumanPlayer(Agent):
                 move_input = input("Enter your move (format depends on game): ").strip()
                 
                 # Try to parse the move
-                parsed_move = game.parse_move_from_output(move_input, legal_moves)
+                parsed_move = game.parse_move_from_output(move_input)
                 
                 if parsed_move is not None and parsed_move in legal_moves:
                     return str(parsed_move) # Evaluator expects string representation

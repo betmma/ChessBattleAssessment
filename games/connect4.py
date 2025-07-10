@@ -166,13 +166,12 @@ class Connect4Game(Game):
         """Get prompt for agent describing current game state"""
         return super().get_chat_history_for_llm(llm)
     
-    def parse_move_from_output(self, raw_output: str, legal_moves: List[int]) -> Optional[int]:
+    def parse_move_from_output(self, raw_output: str) -> Optional[int]:
         """
         Parse move from LLM output for Connect 4
         
         Args:
             raw_output: Raw text output from the LLM
-            legal_moves: List of legal moves for validation
             
         Returns:
             Parsed move as column number or None if no valid move found
@@ -183,11 +182,7 @@ class Connect4Game(Game):
         if bracket_match:
             try:
                 move = int(bracket_match[-1])
-                if move in legal_moves:
-                    return move
-                else:
-                    logging.warning(f"LLM chose illegal column {move} (not in {legal_moves}). Raw: '{raw_output}'")
-                    return None
+                return move
             except ValueError:
                 pass
         
@@ -196,11 +191,7 @@ class Connect4Game(Game):
         if think_match:
             try:
                 move = int(think_match.group(1))
-                if move in legal_moves:
-                    return move
-                else:
-                    logging.warning(f"LLM chose illegal column {move} (not in {legal_moves}). Raw: '{raw_output}'")
-                    return None
+                return move
             except ValueError:
                 pass
         
@@ -209,8 +200,7 @@ class Connect4Game(Game):
         for match in reversed(digit_matches):  # Check from end to beginning
             try:
                 move = int(match)
-                if move in legal_moves:
-                    return move
+                return move
             except ValueError:
                 continue
         

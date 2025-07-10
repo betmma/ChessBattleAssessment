@@ -168,7 +168,7 @@ class NimGame(Game):
         """Format legal moves for display in prompt"""
         return ", ".join([f"({pile_idx},{stones})" for pile_idx, stones in legal_moves])
     
-    def parse_move_from_output(self, raw_output: str, legal_moves: List[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
+    def parse_move_from_output(self, raw_output: str) -> Optional[Tuple[int, int]]:
         """Parse a move from agent's output string, validating against legal moves"""
         # Try to find patterns like (0,2) or [0,2]
         patterns = [
@@ -181,10 +181,9 @@ class NimGame(Game):
             matches = re.findall(pattern, raw_output)
             if matches:
                 try:
-                    pile_idx, stones = int(matches[0][0]), int(matches[0][1])
+                    pile_idx, stones = int(matches[-1][0]), int(matches[-1][1])
                     move = (pile_idx, stones)
-                    if move in legal_moves:
-                        return move
+                    return move
                 except (ValueError, IndexError):
                     continue
         
