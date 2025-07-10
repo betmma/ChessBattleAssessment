@@ -16,7 +16,14 @@ import pkgutil
 board_games_path = os.path.dirname(__file__) + '/boardGames'
 for _, module_name, _ in pkgutil.iter_modules([board_games_path]):
     module = __import__(f'games.boardGames.{module_name}', fromlist=[module_name])
-    GamesList.append(getattr(module, f'{module_name.capitalize()}Game'))
+    possibleNames = [module_name[0].upper()+module_name[1:], module_name.capitalize()]
+    possibleNames.extend([name+'Game' for name in possibleNames])
+    for name in possibleNames:
+        if hasattr(module, name):
+            GamesList.append(getattr(module, name))
+            break
+    else:
+        raise ImportError(f"Module '{module_name}' does not define a game class with expected names: {possibleNames}")
 
 Games = {game.__name__.removesuffix('Game'): game for game in GamesList}
 def GameByName(name: str) -> Game:
