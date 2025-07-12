@@ -6,8 +6,8 @@ Contains game implementations and the base Game class.
 from .game import Game
 from .tictactoe import TicTacToeGame
 from .connect4 import Connect4Game
-from .nim import NimGame
-GamesList = [Connect4Game, TicTacToeGame, NimGame]
+from .nim import NimGame # these 3 games are deprecated, use games in /boardGames instead
+GamesList = []
 
 # import all files under games/boardGames
 import os
