@@ -6,6 +6,7 @@ Contains various AI agent implementations for game playing.
 from .agent import Agent
 from .random_agent import RandomAgent
 from .minimax_agent import MinimaxAgent
+from .mcts_agent import MCTSAgent
 
 # Import API and VLLM agents if dependencies are available
 try:

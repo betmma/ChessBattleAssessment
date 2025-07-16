@@ -1,4 +1,4 @@
-from agents import RandomAgent, MinimaxAgent, APIAgent, VLLMAgent
+from agents import RandomAgent, MinimaxAgent, APIAgent, VLLMAgent, MCTSAgent
 from agents.universal_minimax_agent import UniversalMinimaxAgent
 
 try:
@@ -95,6 +95,12 @@ def create_agent(agent_type, agent_name=None, **kwargs):
         )
         if kwargs.get('enable_thinking')== False:
             agent.enable_thinking = False
+    elif agent_type == 'mcts':
+        agent = MCTSAgent(
+            name=kwargs.get('name', 'MCTS-Agent'),
+            simulations=kwargs.get('simulations', 1000),
+            time_limit=kwargs.get('time_limit', 0.3),
+        )
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
     if agent_name:

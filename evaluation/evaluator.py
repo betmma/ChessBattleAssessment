@@ -494,7 +494,7 @@ class ConsolidatedLogger:
         
         # Create a comprehensive filename
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-        log_filename = f"CONSOLIDATED_{self.agent1_name}_vs_{self.agent2_name}_{timestamp}.json"
+        log_filename = f"{timestamp}_{self.agent1_name}_vs_{self.agent2_name}_CONSOLIDATED.json"
         game_log_path = os.path.join(log_dir, log_filename)
         
         # Combine all data into final structure

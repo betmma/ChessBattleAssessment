@@ -9,6 +9,10 @@ from .connect4 import Connect4Game
 from .nim import NimGame # these 3 games are deprecated, use games in /boardGames instead
 GamesList = []
 
+def underscore_to_camel_case(name: str) -> str:
+    """Convert snake_case to CamelCase."""
+    return ''.join(word.capitalize() for word in name.split('_'))
+
 # import all files under games/boardGames
 import os
 import pkgutil
@@ -16,7 +20,7 @@ import pkgutil
 board_games_path = os.path.dirname(__file__) + '/boardGames'
 for _, module_name, _ in pkgutil.iter_modules([board_games_path]):
     module = __import__(f'games.boardGames.{module_name}', fromlist=[module_name])
-    possibleNames = [module_name[0].upper()+module_name[1:], module_name.capitalize()]
+    possibleNames = [module_name[0].upper()+module_name[1:], module_name.capitalize(), underscore_to_camel_case(module_name)]
     possibleNames.extend([name+'Game' for name in possibleNames])
     for name in possibleNames:
         if hasattr(module, name):

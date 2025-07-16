@@ -30,7 +30,7 @@ def parse_args():
     
     # Agent 1 configuration
     parser.add_argument("--agent1", type=str, required=True, 
-                        choices=["api", "random", "minimax", "vllm"],
+                        choices=["api", "random", "minimax", "vllm", "mcts"],
                         help="First agent type")
     parser.add_argument("--agent1_model", type=str, default="gpt-4-0125-preview", 
                         help="Model name for agent1 (only used if agent1 is 'api')")
@@ -43,10 +43,12 @@ def parse_args():
                         help="Model path for agent1 (only used if agent1 is 'vllm')")
     parser.add_argument("--agent1_random_chance", type=float, default=0.0,
                         help="Chance of agent1 making a random move (only used if agent1 is 'minimax')")
+    parser.add_argument("--agent1_max_depth", type=int, default=4,
+                        help="Max depth for minimax agent (only used if agent1 is 'minimax')")
     
     # Agent 2 configuration
     parser.add_argument("--agent2", type=str, required=True, 
-                        choices=["api", "random", "minimax", "vllm"],
+                        choices=["api", "random", "minimax", "vllm", "mcts"],
                         help="Second agent type")
     parser.add_argument("--agent2_model", type=str, default="gpt-4-0125-preview", 
                         help="Model name for agent2 (only used if agent2 is 'api')")
@@ -59,6 +61,8 @@ def parse_args():
                         help="Model path for agent2 (only used if agent2 is 'vllm')")
     parser.add_argument("--agent2_random_chance", type=float, default=0.0,
                         help="Chance of agent2 making a random move (only used if agent2 is 'minimax')")
+    parser.add_argument("--agent2_max_depth", type=int, default=4,
+                        help="Max depth for minimax agent (only used if agent2 is 'minimax')")
     
     parser.add_argument("--output_dir", type=str, help="Output directory for results")
     
@@ -99,7 +103,8 @@ def main():
             api_base_url=args.agent1_api_base_url,
             api_key=args.agent1_api_key,
             model_path=args.agent1_model_path,
-            random_chance=args.agent1_random_chance
+            random_chance=args.agent1_random_chance,
+            max_depth=args.agent1_max_depth
         )
         logger.info(f"Successfully initialized Agent1: {agent1.name}")
     except Exception as e:
@@ -114,7 +119,8 @@ def main():
             api_base_url=args.agent2_api_base_url,
             api_key=args.agent2_api_key,
             model_path=args.agent2_model_path,
-            random_chance=args.agent2_random_chance
+            random_chance=args.agent2_random_chance,
+            max_depth=args.agent2_max_depth
         )
         logger.info(f"Successfully initialized Agent2: {agent2.name}")
     except Exception as e:
