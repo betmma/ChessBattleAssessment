@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import logging
 import argparse
 import sys
@@ -109,20 +109,25 @@ def main():
         logger.info(f"Successfully initialized Agent1: {agent1.name}")
     except Exception as e:
         logger.critical(f"Failed to initialize Agent1 ({args.agent1}): {e}")
+        raise
         return 1
     
     # Create agent 2
     try:
-        agent2 = create_agent(
-            args.agent2, 
-            model=args.agent2_model,
-            api_base_url=args.agent2_api_base_url,
-            api_key=args.agent2_api_key,
-            model_path=args.agent2_model_path,
-            random_chance=args.agent2_random_chance,
-            max_depth=args.agent2_max_depth
-        )
-        logger.info(f"Successfully initialized Agent2: {agent2.name}")
+        if args.agent2==args.agent1=='vllm' and args.agent2_model_path==args.agent1_model_path:
+            agent2 = agent1
+            logger.info(f"Agent2 is the same as Agent1: {agent2.name}")
+        else:
+            agent2 = create_agent(
+                args.agent2, 
+                model=args.agent2_model,
+                api_base_url=args.agent2_api_base_url,
+                api_key=args.agent2_api_key,
+                model_path=args.agent2_model_path,
+                random_chance=args.agent2_random_chance,
+                max_depth=args.agent2_max_depth
+            )
+            logger.info(f"Successfully initialized Agent2: {agent2.name}")
     except Exception as e:
         logger.critical(f"Failed to initialize Agent2 ({args.agent2}): {e}")
         return 1

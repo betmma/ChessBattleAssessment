@@ -13,9 +13,9 @@ directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
 model_path = "/remote-home1/share/models/Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "../evaluation_results_vllm/grpo/5games_4_filtered.jsonl"
+dataset_path = "../evaluation_results_vllm/grpo/8games_8b_battle_depth4.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/5games_4_qwen8b_strict_16384"
+output_dir = "./outputs/8games_8b_battle_depth4_strict_7200"
 
 os.makedirs(output_dir, exist_ok=True)
 logging.basicConfig(
@@ -49,14 +49,14 @@ except Exception as e:
     exit()
 
 # 3. Load Tokenizer and Model
-max_seq_length = 9000 # Can increase for longer reasoning traces
+max_seq_length = 8000 # Can increase for longer reasoning traces
 max_prompt_length = 800 # Maximum length of the prompt
 lora_rank = 32
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name = model_path,
     max_seq_length = max_seq_length,
     load_in_4bit = False, # 'NoneType' object has no attribute 'absmax' if true. unsloth issue #2910
-    load_in_8bit= True,
+    load_in_8bit= False, # RuntimeError: CUDA driver error: invalid argument
     fast_inference = True, # Enable vLLM fast inference
     max_lora_rank = lora_rank,
     gpu_memory_utilization = 0.7, # Reduce if out of memory
