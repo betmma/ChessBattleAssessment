@@ -86,7 +86,9 @@ def create_agent(agent_type, agent_name=None, **kwargs):
     elif agent_type == "random":
         agent = RandomAgent()
     elif agent_type == "minimax":
-        agent = MinimaxAgent(random_chance=kwargs.get('random_chance', 0.0),
+        agent = MinimaxAgent(
+            random_chance=kwargs.get('random_chance', 0.0),
+            temperature=kwargs.get('temperature', 0.0),
             depth=kwargs.get('max_depth', 2),
         )
     elif agent_type == "vllm":

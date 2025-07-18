@@ -41,8 +41,8 @@ def parse_args():
     parser.add_argument("--agent1_model_path", type=str, 
                         default='Qwen/Qwen3-8B',
                         help="Model path for agent1 (only used if agent1 is 'vllm')")
-    parser.add_argument("--agent1_random_chance", type=float, default=0.0,
-                        help="Chance of agent1 making a random move (only used if agent1 is 'minimax')")
+    parser.add_argument("--agent1_temperature", type=float, default=0.0,
+                        help="Temperature of agent1 (only used if agent1 is 'minimax')")
     parser.add_argument("--agent1_max_depth", type=int, default=4,
                         help="Max depth for minimax agent (only used if agent1 is 'minimax')")
     
@@ -59,8 +59,8 @@ def parse_args():
     parser.add_argument("--agent2_model_path", type=str, 
                         default='Qwen/Qwen3-8B',
                         help="Model path for agent2 (only used if agent2 is 'vllm')")
-    parser.add_argument("--agent2_random_chance", type=float, default=0.0,
-                        help="Chance of agent2 making a random move (only used if agent2 is 'minimax')")
+    parser.add_argument("--agent2_temperature", type=float, default=0.0,
+                        help="Temperature of agent2 (only used if agent2 is 'minimax')")
     parser.add_argument("--agent2_max_depth", type=int, default=4,
                         help="Max depth for minimax agent (only used if agent2 is 'minimax')")
     
@@ -103,7 +103,7 @@ def main():
             api_base_url=args.agent1_api_base_url,
             api_key=args.agent1_api_key,
             model_path=args.agent1_model_path,
-            random_chance=args.agent1_random_chance,
+            temperature=args.agent1_temperature,
             max_depth=args.agent1_max_depth
         )
         logger.info(f"Successfully initialized Agent1: {agent1.name}")
@@ -124,7 +124,7 @@ def main():
                 api_base_url=args.agent2_api_base_url,
                 api_key=args.agent2_api_key,
                 model_path=args.agent2_model_path,
-                random_chance=args.agent2_random_chance,
+                temperature=args.agent2_temperature,
                 max_depth=args.agent2_max_depth
             )
             logger.info(f"Successfully initialized Agent2: {agent2.name}")
