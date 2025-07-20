@@ -24,7 +24,8 @@ for _, module_name, _ in pkgutil.iter_modules([board_games_path]):
     possibleNames.extend([name+'Game' for name in possibleNames])
     for name in possibleNames:
         if hasattr(module, name):
-            GamesList.append(getattr(module, name))
+            gameClass=getattr(module, name)
+            GamesList.append(gameClass)
             break
     else:
         raise ImportError(f"Module '{module_name}' does not define a game class with expected names: {possibleNames}")

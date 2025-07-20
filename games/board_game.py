@@ -10,7 +10,7 @@ class BoardGame(Game):
     It handles games with a 1D or 2D array-based board and n-ary tuple moves.
     """
 
-    game_introduction = None # should be set by subclasses, ensuring it provides sufficient information for playing the game, including rules, objectives and move format.
+    game_introduction = None # should be set by subclasses, ensuring it provides sufficient information for playing the game, including all rules, objectives and move format. Do not write docstring as all information should be in the game_introduction.
     system_prompt = (
         "You are an expert in the {game_name} game.\n"
         "{game_introduction}\n"
