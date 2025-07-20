@@ -4,6 +4,7 @@ import sys
 import os
 import psutil
 from collections import OrderedDict
+import threading
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -16,38 +17,112 @@ class LRUCache:
     def __init__(self, max_size: int):
         self.max_size = max_size
         self.cache = OrderedDict()
+        self._lock = threading.Lock()
     
     def get(self, key):
-        if key in self.cache:
-            # Move to end (most recently used)
-            self.cache.move_to_end(key)
-            return self.cache[key]
-        return None
+        with self._lock:
+            if key in self.cache:
+                # Move to end (most recently used)
+                self.cache.move_to_end(key)
+                return self.cache[key]
+            return None
     
     def put(self, key, value):
-        if key in self.cache:
-            # Update existing key
-            self.cache.move_to_end(key)
-        else:
-            # Add new key
-            if len(self.cache) >= self.max_size:
-                # Remove least recently used item
-                self.cache.popitem(last=False)
-        self.cache[key] = value
+        with self._lock:
+            if key in self.cache:
+                # Update existing key
+                self.cache.move_to_end(key)
+            else:
+                # Add new key
+                if len(self.cache) >= self.max_size:
+                    # Remove least recently used item
+                    self.cache.popitem(last=False)
+            self.cache[key] = value
     
     def clear(self):
-        self.cache.clear()
+        with self._lock:
+            self.cache.clear()
+
+class CacheManager:
+    """Singleton cache manager that maintains one cache per game type"""
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(CacheManager, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if not getattr(self, '_initialized', False):
+            self._game_caches = {}
+            self._cache_lock = threading.Lock()
+            self._initialized = True
+    
+    def get_cache_for_game(self, game_class_name: str, cache_size: int = None) -> LRUCache:
+        """Get or create a cache for a specific game type"""
+        with self._cache_lock:
+            if game_class_name not in self._game_caches:
+                if cache_size is None:
+                    cache_size = self._calculate_default_cache_size()
+                self._game_caches[game_class_name] = LRUCache(cache_size)
+            return self._game_caches[game_class_name]
+    
+    def clear_cache_for_game(self, game_class_name: str):
+        """Clear cache for a specific game type"""
+        with self._cache_lock:
+            if game_class_name in self._game_caches:
+                self._game_caches[game_class_name].clear()
+    
+    def clear_all_caches(self):
+        """Clear all caches"""
+        with self._cache_lock:
+            for cache in self._game_caches.values():
+                cache.clear()
+            self._game_caches.clear()
+    
+    def _calculate_default_cache_size(self) -> int:
+        """Calculate optimal cache size based on available memory"""
+        try:
+            # Get available memory in bytes
+            available_memory = psutil.virtual_memory().available
+            # Use 5% of available memory for cache, assuming ~100 bytes per cache entry
+            cache_size = min(max(1000, available_memory // (100 * 20)), 50000000)
+            return cache_size
+        except:
+            # Fallback to conservative size if psutil fails
+            return 10000
 
 class UniversalMinimaxAgent(Agent):
     """Universal Minimax agent that works with any game implementing the Game interface"""
     
     def __init__(self, name: str = "UniversalMinimax", max_depth: int = 4, debug: bool = False, same_return_random: bool = True):
         super().__init__(name)
-        # Calculate cache size based on available memory
-        cache_size = self._calculate_cache_size()
-        self.score_cache = LRUCache(cache_size)
+        # Use singleton cache manager
+        self.cache_manager = CacheManager()
+        # We'll get the actual cache when we first encounter a game
+        self.score_cache = None
+        self.current_game_class = None
         # Maximum search depth
         self.max_depth = max_depth
+        # Debug mode (default: False for production)
+        self.debug = debug
+        # Option to disable caching for debugging
+        self.use_cache = True
+        # Option to return random move if multiple moves have the same score
+        self.same_return_random = same_return_random
+    
+    def _get_game_cache(self, game):
+        """Get or create the cache for the current game type"""
+        game_class_name = game.__class__.__name__
+        if self.current_game_class != game_class_name:
+            self.current_game_class = game_class_name
+            cache_size = self._calculate_cache_size()
+            self.score_cache = self.cache_manager.get_cache_for_game(game_class_name, cache_size)
+        return self.score_cache
         # Debug mode (default: False for production)
         self.debug = debug
         # Option to disable caching for debugging
@@ -62,11 +137,17 @@ class UniversalMinimaxAgent(Agent):
     def disable_cache(self):
         """Disable caching for debugging purposes"""
         self.use_cache = False
-        self.score_cache.clear()
+        if self.score_cache:
+            self.score_cache.clear()
     
     def enable_cache(self):
         """Re-enable caching"""
         self.use_cache = True
+    
+    def clear_cache_for_current_game(self):
+        """Clear cache for the current game type"""
+        if self.current_game_class:
+            self.cache_manager.clear_cache_for_game(self.current_game_class)
     
     def _calculate_cache_size(self) -> int:
         """Calculate optimal cache size based on available memory"""
@@ -90,6 +171,9 @@ class UniversalMinimaxAgent(Agent):
         Returns:
             str: Best move as string
         """
+        # Ensure we have the correct cache for this game type
+        self._get_game_cache(game)
+        
         rewards = self.get_action_rewards(game)
         if self.same_return_random:
             best_moves,best_reward=[], None
@@ -115,6 +199,9 @@ class UniversalMinimaxAgent(Agent):
         Returns:
             A dictionary mapping each legal move (as a string) to its minimax score.
         """
+        # Ensure we have the correct cache for this game type
+        self._get_game_cache(game)
+        
         from utils.safe_json_dump import clean_np_types
         player_value = game.get_current_player()
         legal_moves = game.get_legal_moves()
