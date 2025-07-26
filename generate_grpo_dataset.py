@@ -115,16 +115,23 @@ def filter_rewards(action_rewards):
     Filters out good rewards 
     """
     reward_values=list(action_rewards.values())
+    
+    if len(reward_values) <=1: 
+        return False
+    
+    if all(i==reward_values[0] for i in reward_values):
+        return False
+    
     win_in_n_threshold=990
-    if (any(i>win_in_n_threshold for i in reward_values) or any(i<-win_in_n_threshold for i in reward_values)) and not all(i==reward_values[0] for i in reward_values):
-        # If there is a win/lose in n moves, and not all rewards are the same
+    if (any(i>win_in_n_threshold for i in reward_values) or any(i<-win_in_n_threshold for i in reward_values)):
+        # If there is a win/lose in n moves
         return True
 
     return False
 
 if __name__ == '__main__':
-    input_file = 'evaluation_results_vllm/game_logs/CONSOLIDATED_Minimax-random-0.2-depth-4_vs_Minimax-random-0.2-depth-4_20250707-090346.json'
-    output_file = 'evaluation_results_vllm/grpo/grpo4_dataset_ttt_nimq.jsonl'
+    input_file = 'evaluation_results_vllm/game_logs/CONSOLIDATED_VLLMAgent_vs_VLLMAgent_20250716-192712.json'
+    output_file = 'evaluation_results_vllm/grpo/8games_8b_battle_depth4_filter.jsonl'
     max_depth = 0
     
     if not os.path.exists(input_file):
