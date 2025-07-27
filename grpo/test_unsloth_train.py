@@ -1,6 +1,6 @@
 # python unsloth_train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from unsloth import FastLanguageModel
 import re
 import torch
@@ -13,9 +13,9 @@ directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
 model_path = "/remote-home1/share/models/Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "../evaluation_results_vllm/grpo/8games_8b_battle_depth4.jsonl"
+dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_1000.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/8games_8b_battle_depth4_strict_7200"
+output_dir = "./outputs/3games_DrCoNi_8b_battle_depth4_filter_strict_7200_fix(a)"
 
 os.makedirs(output_dir, exist_ok=True)
 logging.basicConfig(
@@ -47,6 +47,19 @@ try:
 except Exception as e:
     print(f"Error loading dataset: {e}")
     exit()
+def clean_ground_truth(example):
+    # Access the messy dictionary
+    messy_dict = example['reward_model']['ground_truth']
+
+    # Create a new dictionary containing only the key-value pairs
+    # where the value is not None.
+    cleaned_dict = {k: v for k, v in messy_dict.items() if v is not None}
+
+    # Update the example
+    example['reward_model']['ground_truth'] = cleaned_dict
+    return example
+dataset=dataset.map(clean_ground_truth)
+tasks=list(set(dataset['task']))
 
 # 3. Load Tokenizer and Model
 max_seq_length = 8000 # Can increase for longer reasoning traces
@@ -59,7 +72,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_8bit= False, # RuntimeError: CUDA driver error: invalid argument
     fast_inference = True, # Enable vLLM fast inference
     max_lora_rank = lora_rank,
-    gpu_memory_utilization = 0.7, # Reduce if out of memory
+    gpu_memory_utilization = 0.6, # Reduce if out of memory 0.7->0.6 speed increased by x2?
 )
 
 model = FastLanguageModel.get_peft_model(
@@ -76,54 +89,60 @@ model = FastLanguageModel.get_peft_model(
 
 # 4. Custom Reward Function
 invalidReward=-2000
-def connect4_reward_function(prompts, completions, completion_ids, **reward_kwargs):
-    """
-    Custom reward function for the Connect 4 environment.
+def get_reward_function(task_name):
+    def reward_function(prompts, completions, task, completion_ids, **reward_kwargs):
+        """
+        Args:
+            completions (list of str): The list of generated responses from the model.
+            ground_truth (list of list of int): The ground truth rewards for each column.
+                                                This comes directly from the dataset.
 
-    Args:
-        completions (list of str): The list of generated responses from the model.
-        ground_truth (list of list of int): The ground truth rewards for each column.
-                                            This comes directly from the dataset.
+        Returns:
+            list of float: A list of rewards for each completion.
+        """
+        # print(reward_kwargs)
+        rewards = []
+        for i, completion in enumerate(completions):
+            completion=completion[0]['content']
+            # The prompt that generated this completion
+            current_prompt = prompts[i]
+            if task[i]!=task_name:
+                
+                rewards.append(None)
+                continue
 
-    Returns:
-        list of float: A list of rewards for each completion.
-    """
-    # print(reward_kwargs)
-    rewards = []
-    for i, completion in enumerate(completions):
-        completion=completion[0]['content']
-        # The prompt that generated this completion
-        current_prompt = prompts[i]
-
-        # --- Logging ---
-        logging.info(f"--- Sample {i} in Batch ---")
-        logging.info(f"Prompt: {current_prompt}")
-        logging.info(f"Completion: {completion}")
-        # ---------------
-        try:
-            reward = invalidReward
-            thinkBegin=completion.count('<think>')
-            thinkEnd=completion.count('</think>')
-            if thinkBegin==1 and thinkEnd==1:
-                afterThink=completion.split('</think>')[-1].strip().replace(' ','')
-                if re.match(r'\[\d\]',afterThink):
-                    # This is a valid completion format, e.g., "[0]"
-                    afterThink = afterThink[1:-1]
-                current_ground_truth = reward_kwargs['reward_model'][i]['ground_truth']
-                # seems that trl forces each ground_truth dict to contain all keys appeared in whole dataset, like this {'ground_truth': {'(0, 0)': None, '(0, 1)': -997.0, '(0, 2)': None, '(1, 0)': None, '(1, 1)': -997.0, '(1, 2)': None, '(2, 0)': None, '(2, 1)': 996.0, '(2, 2)': -997.0, '(1, 3)': None, '(3, 1)': None, '(3, 2)': None, '(3, 3)': None, '(0, 3)': None, '(0, 4)': None, '(0, 5)': None, '(0, 6)': None, '(0, 7)': None ... '0': None, '2': None, '4': None, '6': None, '1': None, '3': None, '5': None}}]} so need to remove None values
-                current_ground_truth = {k.replace(' ',''): v for k, v in current_ground_truth.items() if v is not None}
-                # print(current_ground_truth)
-                reward = current_ground_truth.get(afterThink, invalidReward)
-                logging.info(f"After think: {afterThink[:10]}, Reward Dict: {current_ground_truth}, Reward: {reward}")
-            else:
-                logging.warning(f"Invalid completion format for sample {i}.")
-        except Exception as e:
-            print(f"Error processing completion: '{completion}'. Error: {e}")
-            print(f'Reward kwargs: {reward_kwargs}')
-            reward = invalidReward  # Assign a low reward for any processing error
-        logging.info(f"Assigned Reward: {reward}\n")
-        rewards.append(reward)
-    return rewards
+            # --- Logging ---
+            logging.info(f"--- Sample {i} in Batch ---")
+            logging.info(f"Prompt: {current_prompt}")
+            logging.info(f"Completion: {completion}")
+            # ---------------
+            try:
+                reward = invalidReward
+                thinkBegin=completion.count('<think>')
+                thinkEnd=completion.count('</think>')
+                if thinkBegin==1 and thinkEnd==1:
+                    afterThink=completion.split('</think>')[-1].strip().replace(' ','')
+                    if re.match(r'\[\d\]|\(\d\)',afterThink):
+                        # This is a valid completion format, e.g., "[0]"
+                        afterThink = afterThink[1:-1]
+                    current_ground_truth = reward_kwargs['reward_model'][i]['ground_truth']
+                    # seems that dataset load forces each ground_truth dict to contain all keys appeared in whole dataset, like this {'ground_truth': {'(0, 0)': None, '(0, 1)': -997.0, '(0, 2)': None, '(1, 0)': None, '(1, 1)': -997.0, '(1, 2)': None, '(2, 0)': None, '(2, 1)': 996.0, '(2, 2)': -997.0, '(1, 3)': None, '(3, 1)': None, '(3, 2)': None, '(3, 3)': None, '(0, 3)': None, '(0, 4)': None, '(0, 5)': None, '(0, 6)': None, '(0, 7)': None ... '0': None, '2': None, '4': None, '6': None, '1': None, '3': None, '5': None}}]} so need to remove None values
+                    current_ground_truth = {k.replace(' ',''): v for k, v in current_ground_truth.items() if v is not None}
+                    # print(current_ground_truth)
+                    reward = current_ground_truth.get(afterThink, invalidReward)
+                    logging.info(f"After think: {afterThink[:10]}, Reward Dict: {current_ground_truth}, Reward: {reward}")
+                else:
+                    logging.warning(f"Invalid completion format for sample {i}.")
+            except Exception as e:
+                print(f"Error processing completion: '{completion}'. Error: {e}")
+                print(f'Reward kwargs: {reward_kwargs}')
+                reward = invalidReward  # Assign a low reward for any processing error
+            logging.info(f"Assigned Reward: {reward}\n")
+            rewards.append(reward)
+        return rewards
+    reward_function.__name__ = f"{task_name}_reward_function"
+    return reward_function
+reward_functions=[get_reward_function(task) for task in tasks]
 
 # 5. GRPO Configuration with vLLM
 from trl import GRPOTrainer, GRPOConfig
@@ -131,8 +150,8 @@ grpo_config = GRPOConfig(
     output_dir=output_dir,
     num_train_epochs=5,
     per_device_train_batch_size=1, # 
-    gradient_accumulation_steps=8,
-    learning_rate=2e-6,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-5,
     optim = "adamw_8bit",
     num_generations=4,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb. with adamw_8bit 8000-73gb
     logging_steps=10,
@@ -164,7 +183,7 @@ trainer = GRPOTrainer(
     processing_class=tokenizer,
     args=grpo_config,
     train_dataset=dataset,
-    reward_funcs=connect4_reward_function,
+    reward_funcs=reward_functions,
 )
 
 # 7. Start Training

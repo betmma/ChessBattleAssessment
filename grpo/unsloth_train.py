@@ -1,6 +1,6 @@
 # python unsloth_train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from unsloth import FastLanguageModel
 import re
 import torch
@@ -13,9 +13,9 @@ directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
 model_path = "/remote-home1/share/models/Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "../evaluation_results_vllm/grpo/5games_4_filtered.jsonl"
+dataset_path = "../evaluation_results_vllm/grpo/8games_8b_battle_depth4_filter.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/5games_4_qwen8b_strict_8192"
+output_dir = "./outputs/8games_8b_battle_depth4_filter_strict_7200"
 
 os.makedirs(output_dir, exist_ok=True)
 logging.basicConfig(
@@ -49,13 +49,14 @@ except Exception as e:
     exit()
 
 # 3. Load Tokenizer and Model
-max_seq_length = 6000 # Can increase for longer reasoning traces
+max_seq_length = 8000 # Can increase for longer reasoning traces
 max_prompt_length = 800 # Maximum length of the prompt
 lora_rank = 32
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name = model_path,
     max_seq_length = max_seq_length,
-    load_in_4bit = False, # False for LoRA 16bit
+    load_in_4bit = False, # 'NoneType' object has no attribute 'absmax' if true. unsloth issue #2910
+    load_in_8bit= False, # RuntimeError: CUDA driver error: invalid argument
     fast_inference = True, # Enable vLLM fast inference
     max_lora_rank = lora_rank,
     gpu_memory_utilization = 0.7, # Reduce if out of memory
@@ -105,7 +106,7 @@ def connect4_reward_function(prompts, completions, completion_ids, **reward_kwar
             thinkEnd=completion.count('</think>')
             if thinkBegin==1 and thinkEnd==1:
                 afterThink=completion.split('</think>')[-1].strip().replace(' ','')
-                if re.match(r'\[\d\]',afterThink):
+                if re.match(r'\[\d\]|\(\d\)',afterThink):
                     # This is a valid completion format, e.g., "[0]"
                     afterThink = afterThink[1:-1]
                 current_ground_truth = reward_kwargs['reward_model'][i]['ground_truth']
@@ -130,9 +131,10 @@ grpo_config = GRPOConfig(
     output_dir=output_dir,
     num_train_epochs=5,
     per_device_train_batch_size=1, # 
-    gradient_accumulation_steps=8,
-    learning_rate=2e-6,
-    num_generations=4,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb
+    gradient_accumulation_steps=1,
+    learning_rate=1e-5,
+    optim = "adamw_8bit",
+    num_generations=4,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb. with adamw_8bit 8000-73gb
     logging_steps=10,
     save_steps=100,
     report_to="wandb",
