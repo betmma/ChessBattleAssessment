@@ -52,7 +52,7 @@ class BoardGameBalanceEvaluator:
             else:
                 second_player_wins += 1
         
-        balance_score = abs(first_player_wins - second_player_wins) / total_valid_games if total_valid_games > 0 else 0
+        balance_score = (first_player_wins - second_player_wins) / total_valid_games if total_valid_games > 0 else 0
         return {
             "balance_score": balance_score,
             "first_player_wins": first_player_wins,

@@ -39,14 +39,20 @@ def setup_logging(config=None):
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     log_file = os.path.join(config.OUTPUT_DIR, f"evaluation_log_{datetime.now().strftime('%Y%m%d-%H%M%S')}.log")
     
+    # Clear any existing handlers to avoid conflicts
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
     logging.basicConfig(
         level=config.LOG_LEVEL,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler(log_file),
             logging.StreamHandler()
-        ]
+        ],
+        force=True  # Force reconfiguration
     )
     
-    logging.info(f"Logging to {log_file}")
-    return logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging to {log_file}")
+    return logger

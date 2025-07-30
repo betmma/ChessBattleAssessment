@@ -3,6 +3,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import logging
 import argparse
 import sys
+import math
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -67,6 +68,35 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, help="Output directory for results")
     
     return parser.parse_args()
+
+
+def calculate_wilson_ci(successes, trials, confidence=0.95):
+    """
+    Calculate Wilson score confidence interval for proportion.
+    More accurate than normal approximation, especially for small samples.
+    
+    Args:
+        successes: Number of successes
+        trials: Total number of trials
+        confidence: Confidence level (default 0.95 for 95% CI)
+    
+    Returns:
+        tuple: (lower_bound, upper_bound) as percentages
+    """
+    if trials == 0:
+        return (0.0, 0.0)
+    
+    p = successes / trials
+    z = 1.96  # 95% confidence level
+    
+    denominator = 1 + z**2 / trials
+    center = (p + z**2 / (2 * trials)) / denominator
+    margin = z * math.sqrt((p * (1 - p) + z**2 / (4 * trials)) / trials) / denominator
+    
+    lower = max(0, center - margin) * 100
+    upper = min(1, center + margin) * 100
+    
+    return (lower, upper)
 
 
 def main():
@@ -163,8 +193,30 @@ def main():
             all_results[game_name] = results
             total_games_played += config.NUM_EVAL_GAMES
             
-            # Log results for this game
-            logger.info(f"Results for {game_name}: {results}")
+            # Log results for this game with confidence intervals
+            if isinstance(results, dict) and "error" not in results:
+                agent1_wins = results.get('wins_agent1', 0)
+                agent2_wins = results.get('wins_agent2', 0)
+                draws = results.get('draws', 0)
+                valid_games_this_round = agent1_wins + agent2_wins + draws
+                
+                if valid_games_this_round > 0:
+                    agent1_rate = (agent1_wins / valid_games_this_round) * 100
+                    agent2_rate = (agent2_wins / valid_games_this_round) * 100
+                    draw_rate = (draws / valid_games_this_round) * 100
+                    
+                    agent1_ci = calculate_wilson_ci(agent1_wins, valid_games_this_round)
+                    agent2_ci = calculate_wilson_ci(agent2_wins, valid_games_this_round)
+                    draw_ci = calculate_wilson_ci(draws, valid_games_this_round)
+                    
+                    logger.info(f"Results for {game_name}:")
+                    logger.info(f"  Agent1 wins: {agent1_wins}/{valid_games_this_round} ({agent1_rate:.1f}%, 95% CI: {agent1_ci[0]:.1f}%-{agent1_ci[1]:.1f}%)")
+                    logger.info(f"  Agent2 wins: {agent2_wins}/{valid_games_this_round} ({agent2_rate:.1f}%, 95% CI: {agent2_ci[0]:.1f}%-{agent2_ci[1]:.1f}%)")
+                    logger.info(f"  Draws: {draws}/{valid_games_this_round} ({draw_rate:.1f}%, 95% CI: {draw_ci[0]:.1f}%-{draw_ci[1]:.1f}%)")
+                else:
+                    logger.info(f"Results for {game_name}: {results}")
+            else:
+                logger.info(f"Results for {game_name}: {results}")
             
         except Exception as e:
             logger.error(f"Failed to run evaluation for {game_name}: {e}")
@@ -198,7 +250,21 @@ def main():
             logger.info(f"{game_name:>15}: ERROR - {results['error']}")
             continue
             
-        logger.info(f"{game_name:>15}: {results}")
+        # Show detailed results with confidence intervals for each game
+        if isinstance(results, dict):
+            agent1_wins = results.get('wins_agent1', 0)
+            agent2_wins = results.get('wins_agent2', 0)
+            draws = results.get('draws', 0)
+            valid_games_this_game = agent1_wins + agent2_wins + draws
+            
+            if valid_games_this_game > 0:
+                agent1_rate = (agent1_wins / valid_games_this_game) * 100
+                agent1_ci = calculate_wilson_ci(agent1_wins, valid_games_this_game)
+                logger.info(f"{game_name:>15}: Agent1 {agent1_rate:.1f}% ({agent1_ci[0]:.1f}%-{agent1_ci[1]:.1f}%), Agent2 {100-agent1_rate-draws/valid_games_this_game*100:.1f}%, Draws {draws/valid_games_this_game*100:.1f}%")
+            else:
+                logger.info(f"{game_name:>15}: {results}")
+        else:
+            logger.info(f"{game_name:>15}: {results}")
         
         # Add to totals (assuming results dict has these keys)
         if isinstance(results, dict):
@@ -221,9 +287,14 @@ def main():
         agent2_win_rate = (total_agent2_wins / valid_games) * 100
         draw_rate = (total_draws / valid_games) * 100
         
-        logger.info(f"Agent1 win rate: {agent1_win_rate:.1f}%")
-        logger.info(f"Agent2 win rate: {agent2_win_rate:.1f}%")
-        logger.info(f"Draw rate: {draw_rate:.1f}%")
+        # Calculate 95% confidence intervals
+        agent1_ci = calculate_wilson_ci(total_agent1_wins, valid_games)
+        agent2_ci = calculate_wilson_ci(total_agent2_wins, valid_games)
+        draw_ci = calculate_wilson_ci(total_draws, valid_games)
+        
+        logger.info(f"Agent1 win rate: {agent1_win_rate:.1f}% (95% CI: {agent1_ci[0]:.1f}%-{agent1_ci[1]:.1f}%)")
+        logger.info(f"Agent2 win rate: {agent2_win_rate:.1f}% (95% CI: {agent2_ci[0]:.1f}%-{agent2_ci[1]:.1f}%)")
+        logger.info(f"Draw rate: {draw_rate:.1f}% (95% CI: {draw_ci[0]:.1f}%-{draw_ci[1]:.1f}%)")
     
     logger.info("=" * 80)
     logger.info("Multi-game battle evaluation complete!")
