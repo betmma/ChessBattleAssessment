@@ -304,6 +304,7 @@ def main():
     args = parser.parse_args()
     
     config = Config()
+    config.LOG_ACTION_REWARDS=False
     evaluator = BoardGameBalanceEvaluator(config=config, num_games=args.num_games, depth=args.depth)
     
     messages = []  # Collect all output messages
