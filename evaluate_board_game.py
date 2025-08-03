@@ -99,17 +99,7 @@ class BoardGameBalanceEvaluator:
         uniqueness_ratio = len(unique_states) / total_states if total_states > 0 else 0
         return {"uniqueness_ratio": uniqueness_ratio, "unique_states": len(unique_states), "total_states": total_states, "variation_score": uniqueness_ratio}
     
-    def evaluate_agent_pair_metrics(self, game_class: type, agent1, agent2, agent_pair_name: str) -> Dict[str, Any]:
-        cache_key = f"{game_class.__name__}_{agent1.name}_{agent2.name}"
-        results, logger = self.get_or_cache_game_logs(game_class, agent1, agent2, cache_key)
-        game_logs = logger.game_logs_data
-        return {
-            "agent_pair": agent_pair_name,
-            "balance": self.calculate_balance_from_logs(game_logs),
-            "deterministic": self.calculate_deterministic_from_logs(results),
-            "length": self.calculate_length_from_logs(game_logs),
-            "detailed_results": results
-        }
+
     
     def evaluate_controllability(self, game_class: type, num_samples: int = 100) -> Dict[str, Any]:
         legal_move_counts = []
@@ -138,92 +128,106 @@ class BoardGameBalanceEvaluator:
             }
         return {"average_legal_moves": 0, "median_legal_moves": 0, "min_legal_moves": 0, "max_legal_moves": 0, "std_legal_moves": 0, "states_sampled": 0, "controllability_score": 0}
     
-    def evaluate_strategy_depth(self, game_class: type) -> Dict[str, Any]:
-        strategy_results = {}
-        random_agent = RandomAgent(name="Random")
+
+    
+
+    
+    def generate_all_game_logs(self, game_class: type) -> Dict[str, Tuple[Dict, Any]]:
+        """Generate all game logs needed for evaluation"""
+        game_name = game_class.__name__
+        self.logger.info(f"Starting game log generation for {game_name}")
         
+        all_logs = {}
+        
+        # Random vs Random
+        self.logger.info("Generating Random vs Random logs...")
+        agent1 = RandomAgent(name="Random-1")
+        agent2 = RandomAgent(name="Random-2")
+        cache_key = f"{game_name}_Random_vs_Random"
+        all_logs["Random vs Random"] = self.get_or_cache_game_logs(game_class, agent1, agent2, cache_key)
+        
+        # Minimax vs Minimax (same depth)
         for depth in range(1, self.depth + 1):
-            minimax_agent = MinimaxAgent(name=f"Minimax-depth-{depth}", depth=depth)
-            results, _ = self.evaluator.evaluate_agent_vs_agent_with_logger(random_agent, minimax_agent, game_class, self.num_games)
-            minimax_wins = results.get("wins_agent2", 0)
-            total_valid = results.get("total_games", 0) - results.get("forfeits_agent1", 0) - results.get("forfeits_agent2", 0)
-            strategy_results[f"random_vs_minimax_depth_{depth}"] = {
-                "minimax_win_rate": minimax_wins / total_valid if total_valid > 0 else 0,
-                "minimax_wins": minimax_wins,
-                "total_valid_games": total_valid
-            }
+            self.logger.info(f"Generating Minimax depth {depth} vs depth {depth} logs...")
+            agent1 = MinimaxAgent(name=f"Minimax-depth-{depth}-1", depth=depth)
+            agent2 = MinimaxAgent(name=f"Minimax-depth-{depth}-2", depth=depth)
+            cache_key = f"{game_name}_Minimax-depth-{depth}_vs_Minimax-depth-{depth}"
+            all_logs[f"Minimax depth {depth} vs depth {depth}"] = self.get_or_cache_game_logs(game_class, agent1, agent2, cache_key)
         
+        # Random vs Minimax (for strategy depth)
+        random_agent = RandomAgent(name="Random")
+        for depth in range(1, self.depth + 1):
+            self.logger.info(f"Generating Random vs Minimax depth {depth} logs...")
+            minimax_agent = MinimaxAgent(name=f"Minimax-depth-{depth}", depth=depth)
+            cache_key = f"{game_name}_Random_vs_Minimax-depth-{depth}"
+            all_logs[f"Random vs Minimax depth {depth}"] = self.get_or_cache_game_logs(game_class, random_agent, minimax_agent, cache_key)
+        
+        # Minimax depth battles (depth i vs depth i+1)
         for depth1 in range(1, self.depth):
             depth2 = depth1 + 1
+            self.logger.info(f"Generating Minimax depth {depth1} vs depth {depth2} logs...")
             agent1 = MinimaxAgent(name=f"Minimax-depth-{depth1}", depth=depth1)
             agent2 = MinimaxAgent(name=f"Minimax-depth-{depth2}", depth=depth2)
-            results, _ = self.evaluator.evaluate_agent_vs_agent_with_logger(agent1, agent2, game_class, self.num_games)
-            higher_depth_wins = results.get("wins_agent2", 0)
-            lower_depth_wins = results.get("wins_agent1", 0)
-            draws = results.get("draws", 0)
-            total_valid = results.get("total_games", 0) - results.get("forfeits_agent1", 0) - results.get("forfeits_agent2", 0)
-            
-            strategy_results[f"depth_{depth1}_vs_depth_{depth2}"] = {
-                "higher_depth_win_rate": higher_depth_wins / total_valid if total_valid > 0 else 0,
-                "lower_depth_win_rate": lower_depth_wins / total_valid if total_valid > 0 else 0,
-                "draw_rate": draws / total_valid if total_valid > 0 else 0,
-                "higher_depth_wins": higher_depth_wins,
-                "lower_depth_wins": lower_depth_wins,
-                "draws": draws,
-                "total_valid_games": total_valid
-            }
-        return strategy_results
-    
-    def evaluate_variation(self, game_class: type, temperature_values: List[float] = None) -> Dict[str, Any]:
-        if temperature_values is None:
-            temperature_values = [0.0, 0.5, 1.0, 2.0]
+            cache_key = f"{game_name}_Minimax-depth-{depth1}_vs_Minimax-depth-{depth2}"
+            all_logs[f"Minimax depth {depth1} vs depth {depth2}"] = self.get_or_cache_game_logs(game_class, agent1, agent2, cache_key)
         
-        variation_results = {}
+        # Minimax with temperature (for variation)
+        temperature_values = [0.0, 0.5, 1.0, 2.0]
         for temp in temperature_values:
-            agent1 = MinimaxAgent(name=f"Minimax-temp-{temp}", depth=2, temperature=temp)
+            self.logger.info(f"Generating Minimax temperature {temp} vs temperature {temp} logs...")
+            agent1 = MinimaxAgent(name=f"Minimax-temp-{temp}-1", depth=2, temperature=temp)
             agent2 = MinimaxAgent(name=f"Minimax-temp-{temp}-2", depth=2, temperature=temp)
-            cache_key = f"{game_class.__name__}_temp_{temp}_variation"
-            results, logger = self.get_or_cache_game_logs(game_class, agent1, agent2, cache_key)
-            variation_metrics = self.calculate_variation_from_logs(logger.game_logs_data)
-            variation_metrics["detailed_results"] = results
-            variation_results[f"temperature_{temp}"] = variation_metrics
-        return variation_results
+            cache_key = f"{game_name}_Minimax-temp-{temp}_vs_Minimax-temp-{temp}"
+            all_logs[f"Minimax temperature {temp} vs temperature {temp}"] = self.get_or_cache_game_logs(game_class, agent1, agent2, cache_key)
+        
+        self.logger.info(f"Completed game log generation for {game_name}")
+        return all_logs
+    
+    def calculate_all_metrics_from_logs(self, game_logs_dict: Dict[str, Tuple[Dict, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Calculate all metrics from generated game logs"""
+        self.logger.info("Calculating metrics from game logs...")
+        
+        agent_pair_metrics = {}
+        
+        for pair_name, (results, logger) in game_logs_dict.items():
+            self.logger.info(f"Calculating metrics for {pair_name}")
+            game_logs = logger.game_logs_data
+            
+            # Calculate all metrics for this agent pair
+            metrics = {
+                "balance": self.calculate_balance_from_logs(game_logs),
+                "deterministic": self.calculate_deterministic_from_logs(results),
+                "length": self.calculate_length_from_logs(game_logs),
+                "variation": self.calculate_variation_from_logs(game_logs),
+                "detailed_results": results
+            }
+            
+            agent_pair_metrics[pair_name] = metrics
+        
+        self.logger.info("Completed metric calculations")
+        return agent_pair_metrics
     
     def evaluate_all_metrics(self, game_class: type) -> Dict[str, Any]:
         game_name = game_class.__name__
         self.logger.info(f"Starting comprehensive evaluation for {game_name}")
         
+        # Step 1: Generate all game logs
+        all_game_logs = self.generate_all_game_logs(game_class)
+        
+        # Step 2: Calculate metrics from logs
+        agent_pair_metrics = self.calculate_all_metrics_from_logs(all_game_logs)
+        
+        # Step 3: Calculate controllability (doesn't need game logs)
+        self.logger.info("Evaluating controllability...")
+        controllability = self.evaluate_controllability(game_class)
+        
         all_results = {
             "game_name": game_name,
             "evaluation_timestamp": datetime.now().isoformat(),
-            "num_games_per_metric": self.num_games
+            "num_games_per_metric": self.num_games,
+            "agent_pair_metrics": agent_pair_metrics,
+            "controllability": controllability
         }
-        
-        # Agent pairs for evaluation
-        agent_pairs = [(RandomAgent(name="Random-1"), RandomAgent(name="Random-2"), "Random vs Random")]
-        for depth in range(1, self.depth + 1):
-            agent_pairs.append((MinimaxAgent(name=f"Minimax-depth-{depth}-1", depth=depth), 
-                              MinimaxAgent(name=f"Minimax-depth-{depth}-2", depth=depth), 
-                              f"Minimax depth {depth} vs depth {depth}"))
-        
-        # Evaluate balance, deterministic, and length
-        agent_pair_results = []
-        for agent1, agent2, pair_name in agent_pairs:
-            self.logger.info(f"Evaluating {pair_name}")
-            pair_results = self.evaluate_agent_pair_metrics(game_class, agent1, agent2, pair_name)
-            agent_pair_results.append(pair_results)
-        
-        all_results["agent_pair_evaluations"] = agent_pair_results
-        
-        # Other evaluations
-        self.logger.info("Evaluating controllability...")
-        all_results["controllability"] = self.evaluate_controllability(game_class)
-        
-        self.logger.info("Evaluating strategy depth...")
-        all_results["strategy_depth"] = self.evaluate_strategy_depth(game_class)
-        
-        self.logger.info("Evaluating variation...")
-        all_results["variation"] = self.evaluate_variation(game_class)
         
         self.logger.info(f"Completed comprehensive evaluation for {game_name}")
         return all_results
@@ -232,66 +236,50 @@ class BoardGameBalanceEvaluator:
         game_name = results.get("game_name", "Unknown")
         summary_lines = [f"\n{'='*60}\nEVALUATION SUMMARY FOR {game_name.upper()}\n{'='*60}"]
         
-        # Agent pair evaluations
-        agent_pairs = results.get("agent_pair_evaluations", [])
-        if agent_pairs:
-            summary_lines.append(f"\n1. AGENT PAIR EVALUATIONS:")
-            for pair_data in agent_pairs:
-                pair_name = pair_data.get("agent_pair", "Unknown")
-                balance = pair_data.get("balance", {})
-                deterministic = pair_data.get("deterministic", {})
-                length = pair_data.get("length", {})
+        # Agent pair metrics
+        agent_pair_metrics = results.get("agent_pair_metrics", {})
+        if agent_pair_metrics:
+            summary_lines.append(f"\nAGENT PAIR METRICS:")
+            
+            for pair_name, metrics in agent_pair_metrics.items():
+                balance = metrics.get("balance", {})
+                deterministic = metrics.get("deterministic", {})
+                length = metrics.get("length", {})
+                variation = metrics.get("variation", {})
+                detailed_results = metrics.get("detailed_results", {})
+                
+                # Calculate win rates from detailed results
+                total_games = detailed_results.get("total_games", 0)
+                agent1_wins = detailed_results.get("wins_agent1", 0)
+                agent2_wins = detailed_results.get("wins_agent2", 0)
+                draws = detailed_results.get("draws", 0)
+                
+                agent1_win_rate = agent1_wins / total_games if total_games > 0 else 0
+                agent2_win_rate = agent2_wins / total_games if total_games > 0 else 0
+                draw_rate = draws / total_games if total_games > 0 else 0
                 
                 summary_lines.extend([
-                    f"\n   {pair_name}:",
-                    f"     Balance score (0 is best): {balance.get('balance_score', 0):.3f}",
-                    f"     First player win rate: {balance.get('first_player_rate', 0):.3f}",
-                    f"     Non-draw rate: {deterministic.get('non_draw_rate', 0):.3f}",
-                    f"     Average length: {length.get('average_length', 0):.1f} moves"
+                    f"\n{pair_name}:",
+                    f"  Agent1 win rate: {agent1_win_rate:.3f} ({agent1_wins}/{total_games})",
+                    f"  Agent2 win rate: {agent2_win_rate:.3f} ({agent2_wins}/{total_games})",
+                    f"  Draw rate: {draw_rate:.3f} ({draws}/{total_games})",
+                    f"  Balance score (0 is best): {balance.get('balance_score', 0):.3f}",
+                    f"  First player win rate: {balance.get('first_player_rate', 0):.3f}",
+                    f"  Second player win rate: {balance.get('second_player_rate', 0):.3f}",
+                    f"  Deterministic score: {deterministic.get('deterministic_score', 0):.3f}",
+                    f"  Average length: {length.get('average_length', 0):.1f} moves",
+                    f"  Variation score: {variation.get('variation_score', 0):.3f}"
                 ])
         
         # Controllability
         controllability = results.get("controllability", {})
         summary_lines.extend([
-            f"\n2. CONTROLLABILITY:",
-            f"   Average legal moves: {controllability.get('average_legal_moves', 0):.1f}",
-            f"   Range: {controllability.get('min_legal_moves', 0)}-{controllability.get('max_legal_moves', 0)}",
-            f"   States sampled: {controllability.get('states_sampled', 0)}"
+            f"\nCONTROLLABILITY:",
+            f"  Average legal moves: {controllability.get('average_legal_moves', 0):.1f}",
+            f"  Range: {controllability.get('min_legal_moves', 0)}-{controllability.get('max_legal_moves', 0)}",
+            f"  States sampled: {controllability.get('states_sampled', 0)}",
+            f"  Controllability score: {controllability.get('controllability_score', 0):.1f}"
         ])
-        
-        # Strategy depth
-        strategy = results.get("strategy_depth", {})
-        summary_lines.append(f"\n3. STRATEGY DEPTH:")
-        for depth in range(1, self.depth + 1):
-            key = f"random_vs_minimax_depth_{depth}"
-            if key in strategy:
-                win_rate = strategy[key].get("minimax_win_rate", 0)
-                summary_lines.append(f"   Random vs Minimax-{depth}: {win_rate:.3f} minimax win rate")
-        
-        summary_lines.append(f"\n   Depth battles (win/draw/lose rates for higher depth):")
-        for depth1 in range(1, self.depth):
-            depth2 = depth1 + 1
-            key = f"depth_{depth1}_vs_depth_{depth2}"
-            if key in strategy:
-                win_rate = strategy[key].get("higher_depth_win_rate", 0)
-                draw_rate = strategy[key].get("draw_rate", 0)
-                lose_rate = strategy[key].get("lower_depth_win_rate", 0)
-                wins = strategy[key].get("higher_depth_wins", 0)
-                draws = strategy[key].get("draws", 0)
-                losses = strategy[key].get("lower_depth_wins", 0)
-                total = strategy[key].get("total_valid_games", 0)
-                summary_lines.append(f"   Depth-{depth1} vs Depth-{depth2}: Win {win_rate:.3f} ({wins}/{total}), Draw {draw_rate:.3f} ({draws}/{total}), Lose {lose_rate:.3f} ({losses}/{total})")
-        
-        # Variation
-        variation = results.get("variation", {})
-        summary_lines.append(f"\n4. VARIATION (unique states ratio):")
-        for temp in [0.0, 0.5, 1.0, 2.0]:
-            key = f"temperature_{temp}"
-            if key in variation:
-                uniqueness = variation[key].get("uniqueness_ratio", 0)
-                unique_states = variation[key].get("unique_states", 0)
-                total_states = variation[key].get("total_states", 0)
-                summary_lines.append(f"   Temperature {temp}: {uniqueness:.3f} ({unique_states}/{total_states} states)")
         
         return '\n'.join(summary_lines)
     
