@@ -15,7 +15,7 @@ model_path = "/remote-home1/share/models/Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
 dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_1000.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/3games_DrCoNi_8b_battle_depth4_filter_strict_7200_fix(a)"
+output_dir = "./outputs/3games_DrCoNi_8b_battle_depth4_filter_strict_11200_fix(a)_gen8"
 
 os.makedirs(output_dir, exist_ok=True)
 logging.basicConfig(
@@ -62,7 +62,7 @@ dataset=dataset.map(clean_ground_truth)
 tasks=list(set(dataset['task']))
 
 # 3. Load Tokenizer and Model
-max_seq_length = 8000 # Can increase for longer reasoning traces
+max_seq_length = 12000 # Can increase for longer reasoning traces
 max_prompt_length = 800 # Maximum length of the prompt
 lora_rank = 32
 model, tokenizer = FastLanguageModel.from_pretrained(
@@ -72,7 +72,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_8bit= False, # RuntimeError: CUDA driver error: invalid argument
     fast_inference = True, # Enable vLLM fast inference
     max_lora_rank = lora_rank,
-    gpu_memory_utilization = 0.6, # Reduce if out of memory 0.7->0.6 speed increased by x2?
+    gpu_memory_utilization = 0.5, # Reduce if out of memory 0.7->0.6 speed increased by x2?
 )
 
 model = FastLanguageModel.get_peft_model(
@@ -153,7 +153,7 @@ grpo_config = GRPOConfig(
     gradient_accumulation_steps=1,
     learning_rate=1e-5,
     optim = "adamw_8bit",
-    num_generations=4,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb. with adamw_8bit 8000-73gb
+    num_generations=8,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb. with adamw_8bit 8000-73gb
     logging_steps=10,
     save_steps=100,
     report_to="wandb",
@@ -188,7 +188,8 @@ trainer = GRPOTrainer(
 
 # 7. Start Training
 print("Starting GRPO training with vLLM...")
-trainer.train()
+
+trainer.train(resume_from_checkpoint=False)
 print("Training finished.")
 
 # 8. Save the final model
