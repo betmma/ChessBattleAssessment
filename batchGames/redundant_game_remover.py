@@ -328,11 +328,11 @@ class RedundantGameRemover:
 
 def main():
     parser = argparse.ArgumentParser(description='Remove redundant games based on trajectory comparison')
-    parser.add_argument('--input_dir', type=str, default='/root/myr/genGames/successGames',
+    parser.add_argument('--input_dir', type=str, default='/root/myr/genGames/0803/successGames',
                        help='Directory containing generated games')
-    parser.add_argument('--output_dir', type=str, default='/root/myr/genGames/unique_games',
+    parser.add_argument('--output_dir', type=str, default='/root/myr/genGames/0803/uniqueGames',
                        help='Directory to save unique games')
-    parser.add_argument('--depths', type=int, nargs='+', default=[1, 2, 3],
+    parser.add_argument('--depths', type=int, nargs='+', default=[1],
                        help='Minimax depths to use for trajectory collection')
     parser.add_argument('--num_trajectories', type=int, default=3,
                        help='Number of trajectories to collect per depth')
