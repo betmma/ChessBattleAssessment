@@ -1,6 +1,6 @@
 # python unsloth_train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from unsloth import FastLanguageModel
 import re
 import torch
@@ -15,9 +15,19 @@ model_path = "/remote-home1/share/models/Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
 dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_1000.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/3games_DrCoNi_8b_battle_depth4_filter_strict_11200_fix(a)_gen8"
+output_dir = "./outputs/3games_DrCoNi_8b_battle_depth4_filter_strict_11200_fix(a)_gen8_lr3e-5"
+
+FULL_PARAMETER_TRAINING = False
+
+if FULL_PARAMETER_TRAINING:
+    output_dir += "_full"
 
 os.makedirs(output_dir, exist_ok=True)
+
+# copy this script to output_dir for record
+import shutil
+shutil.copy(__file__, os.path.join(output_dir, os.path.basename(__file__)+'-'+datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')+'.backup'))
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -71,21 +81,35 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_4bit = False, # 'NoneType' object has no attribute 'absmax' if true. unsloth issue #2910
     load_in_8bit= False, # RuntimeError: CUDA driver error: invalid argument
     fast_inference = True, # Enable vLLM fast inference
+    full_finetuning = FULL_PARAMETER_TRAINING, # full parameter 4bit + 2000 max length still oom 
     max_lora_rank = lora_rank,
     gpu_memory_utilization = 0.5, # Reduce if out of memory 0.7->0.6 speed increased by x2?
 )
 
-model = FastLanguageModel.get_peft_model(
-    model,
-    r = lora_rank, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
-    target_modules = [
-        "q_proj", "k_proj", "v_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj",
-    ],
-    lora_alpha = lora_rank*2, # *2 speeds up training
-    use_gradient_checkpointing = "unsloth", # Reduces memory usage
-    random_state = 3407,
-)
+if FULL_PARAMETER_TRAINING:
+    class dummyWith:
+        def __init__(self):
+            pass
+
+        def __enter__(self):
+            pass
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    model.disable_adapter = dummyWith # For compatibility with peft, which uses model.disable_adapter() to disable adapters during inference
+else:
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r = lora_rank, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+        target_modules = [
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
+        lora_alpha = lora_rank*2, # *2 speeds up training
+        use_gradient_checkpointing = "unsloth", # Reduces memory usage
+        random_state = 3407,
+    )
 
 # 4. Custom Reward Function
 invalidReward=-2000
@@ -151,7 +175,7 @@ grpo_config = GRPOConfig(
     num_train_epochs=5,
     per_device_train_batch_size=1, # 
     gradient_accumulation_steps=1,
-    learning_rate=1e-5,
+    learning_rate=3e-5,
     optim = "adamw_8bit",
     num_generations=8,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb. with adamw_8bit 8000-73gb
     logging_steps=10,
@@ -164,7 +188,7 @@ grpo_config = GRPOConfig(
     max_prompt_length=max_prompt_length,
     max_completion_length=max_seq_length - max_prompt_length,
 
-    #generation_kwargs={'max_tokens': 5000},
+    generation_kwargs={'max_length': max_seq_length} if FULL_PARAMETER_TRAINING else None, # full parameter uses it i dunno why
     
     # use_liger_loss=True, # this slightly increases memory usage (^^;
     
