@@ -110,6 +110,107 @@ def generate_dataset(input_file: str, output_file: str, max_depth: int = 4):
         
         print(f"\nTotal unique board states processed: {processed_count}")
 
+def recalculate_rewards_from_jsonl(input_jsonl: str, output_jsonl: str, new_max_depth: int = 6):
+    """
+    Reads a generated JSONL dataset and recalculates rewards using a different minimax depth.
+    
+    Args:
+        input_jsonl: Path to the input JSONL file with existing dataset entries.
+        output_jsonl: Path to the output JSONL file with updated rewards.
+        new_max_depth: The new maximum depth for the Minimax agent.
+    """
+    minimax_agent = UniversalMinimaxAgent(max_depth=new_max_depth)
+    processed_count = 0
+    skipped_count = 0
+    
+    # Count total entries for progress bar
+    total_entries = 0
+    with open(input_jsonl, 'r') as f:
+        for _ in f:
+            total_entries += 1
+    
+    with open(input_jsonl, 'r') as f_in, open(output_jsonl, 'w') as f_out:
+        with tqdm(total=total_entries, desc="Recalculating rewards", unit="entry") as pbar:
+            for line in f_in:
+                pbar.update(1)
+                
+                try:
+                    entry = json.loads(line.strip())
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Failed to parse JSON line: {e}")
+                    skipped_count += 1
+                    continue
+                
+                task = entry.get("task", "")
+                prompt = entry.get("prompt", [])
+                
+                if not task or not prompt:
+                    print(f"Warning: Missing task or prompt in entry, skipping...")
+                    skipped_count += 1
+                    continue
+                
+                # Extract board state from the prompt
+                # The board state should be in the user message content
+                board_str = None
+                for message in prompt:
+                    if message.get("role") == "user":
+                        content = message.get("content", "")
+                        # Extract the board portion (everything before "You are player")
+                        if "You are player" in content:
+                            board_str = content.split("You are player")[0].strip()
+                            break
+                
+                if not board_str:
+                    print(f"Warning: Could not extract board state from prompt, skipping...")
+                    skipped_count += 1
+                    continue
+                
+                # Get the game class and create instance
+                try:
+                    game_class = GameByName(task)
+                    game = game_class()
+                except KeyError:
+                    print(f"Warning: Unknown game type {task}, skipping...")
+                    skipped_count += 1
+                    continue
+                
+                # Load the game state
+                try:
+                    game.load_state_from_representation(board_str)
+                except Exception as e:
+                    print(f"Warning: Failed to load game state for {task}: {e}")
+                    skipped_count += 1
+                    continue
+                
+                # Recalculate action rewards with new depth
+                try:
+                    new_action_rewards = minimax_agent.get_action_rewards(game)
+                except Exception as e:
+                    print(f"Warning: Failed to get action rewards for {task}: {e}")
+                    skipped_count += 1
+                    continue
+                
+                # Filter rewards to ensure quality
+                if not filter_rewards(new_action_rewards):
+                    skipped_count += 1
+                    continue
+                
+                # Update the entry with new rewards
+                updated_entry = entry.copy()
+                updated_entry["reward_model"]["ground_truth"] = new_action_rewards
+                
+                # Write the updated entry
+                f_out.write(json.dumps(updated_entry) + '\n')
+                processed_count += 1
+                
+                # Update progress bar description
+                pbar.set_description(f"Recalculating rewards (Processed: {processed_count}, Skipped: {skipped_count})")
+    
+    print(f"\nRecalculation complete!")
+    print(f"Total entries processed: {processed_count}")
+    print(f"Total entries skipped: {skipped_count}")
+    print(f"Updated dataset saved to: {output_jsonl}")
+
 def filter_rewards(action_rewards):
     """
     Filters out good rewards 
@@ -130,10 +231,10 @@ def filter_rewards(action_rewards):
     return False
 
 if __name__ == '__main__':
-    input_file = 'evaluation_results_vllm/game_logs/CONSOLIDATED_VLLMAgent_vs_VLLMAgent_20250716-192712.json'
-    output_file = 'evaluation_results_vllm/grpo/8games_8b_battle_depth4_filter.jsonl'
-    max_depth = 0
-    
+    input_file = 'evaluation_results_vllm/grpo/DrCoNi_1000.jsonl'
+    output_file = 'evaluation_results_vllm/grpo/DrCoNi_1000_d6.jsonl'
+    max_depth = 6
+
     if not os.path.exists(input_file):
         print(f"Error: Input file {input_file} does not exist")
         print("Available consolidated log files:")
@@ -147,5 +248,8 @@ if __name__ == '__main__':
     # Create output directory if it doesn't exist
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    generate_dataset(input_file, output_file, max_depth)
+    if input_file.endswith('.json'):
+        generate_dataset(input_file, output_file, max_depth)
+    elif input_file.endswith('.jsonl'):
+        recalculate_rewards_from_jsonl(input_file, output_file, new_max_depth=max_depth)
     print(f"Dataset generated successfully at {output_file}")

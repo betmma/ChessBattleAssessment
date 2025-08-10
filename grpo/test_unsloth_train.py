@@ -1,6 +1,13 @@
+# use vllm server mode:
+'''
+unset http_proxy
+CUDA_VISIBLE_DEVICES=1 trl vllm-serve --model "/remote-home1/share/models/Qwen3-8B" --port 8001 --max_model_len 16384 --data_parallel_size 1 --enable_prefix_caching True
+
+'''
+
 # python unsloth_train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 from unsloth import FastLanguageModel
 import re
 import torch
@@ -15,9 +22,10 @@ model_path = "/remote-home1/share/models/Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
 dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_1000.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/3games_DrCoNi_8b_battle_depth4_filter_strict_11200_fix(a)_gen8_lr3e-5"
+output_dir = "./outputs/test_unsloth_vllm_server_mode"
 
 FULL_PARAMETER_TRAINING = False
+VLLM_SERVER_MODE = True
 
 if FULL_PARAMETER_TRAINING:
     output_dir += "_full"
@@ -80,7 +88,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     max_seq_length = max_seq_length,
     load_in_4bit = False, # 'NoneType' object has no attribute 'absmax' if true. unsloth issue #2910
     load_in_8bit= False, # RuntimeError: CUDA driver error: invalid argument
-    fast_inference = True, # Enable vLLM fast inference
+    fast_inference = False if VLLM_SERVER_MODE else True, # Enable vLLM fast inference
     full_finetuning = FULL_PARAMETER_TRAINING, # full parameter 4bit + 2000 max length still oom 
     max_lora_rank = lora_rank,
     gpu_memory_utilization = 0.5, # Reduce if out of memory 0.7->0.6 speed increased by x2?
@@ -170,26 +178,26 @@ reward_functions=[get_reward_function(task) for task in tasks]
 
 # 5. GRPO Configuration with vLLM
 from trl import GRPOTrainer, GRPOConfig
-grpo_config = GRPOConfig(
-    output_dir=output_dir,
-    num_train_epochs=5,
-    per_device_train_batch_size=1, # 
-    gradient_accumulation_steps=1,
-    learning_rate=3e-5,
-    optim = "adamw_8bit",
-    num_generations=8,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb. with adamw_8bit 8000-73gb
-    logging_steps=10,
-    save_steps=100,
-    report_to="wandb",
-    run_name=output_dir.split('/')[-1],
-    remove_unused_columns=False, # Keep 'reward_model' column for the reward function
+grpo_config_args={
+    'output_dir':output_dir,
+    'num_train_epochs':5,
+    'per_device_train_batch_size':1, # 
+    'gradient_accumulation_steps':1,
+    'learning_rate':3e-5,
+    'optim': "adamw_8bit",
+    'num_generations':8, 
+    'logging_steps':10,
+    'save_steps':100,
+    'report_to':"wandb",
+    'run_name':output_dir.split('/')[-1],
+    'remove_unused_columns':False, # Keep 'reward_model' column for the reward function
 
     # Key change: max_length is removed. Use max_prompt_length and max_completion_length
-    max_prompt_length=max_prompt_length,
-    max_completion_length=max_seq_length - max_prompt_length,
+    'max_prompt_length':max_prompt_length,
+    'max_completion_length':max_seq_length - max_prompt_length,
 
-    generation_kwargs={'max_length': max_seq_length} if FULL_PARAMETER_TRAINING else None, # full parameter uses it i dunno why
-    
+    'generation_kwargs':{'max_length': max_seq_length} if FULL_PARAMETER_TRAINING else None, # full parameter uses it i dunno why
+
     # use_liger_loss=True, # this slightly increases memory usage (^^;
     
     # --- vLLM Integration ---
@@ -199,7 +207,17 @@ grpo_config = GRPOConfig(
     # Adjust based on your GPU memory. 0.3 means 30% of GPU memory is allocated to vLLM.
     # The rest is used for training. You may need to tune this value.
     # vllm_gpu_memory_utilization=0.5,
-)
+}
+
+if VLLM_SERVER_MODE:
+    vllm_server_args={
+        'use_vllm':True,
+        'vllm_mode':'server',
+        'vllm_server_base_url':"http://localhost:8001"
+    }
+    grpo_config_args=grpo_config_args|vllm_server_args
+
+grpo_config=GRPOConfig(**grpo_config_args)
 
 # 6. Initialize GRPOTrainer
 trainer = GRPOTrainer(

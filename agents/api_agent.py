@@ -192,7 +192,7 @@ class APIAgent(Agent):
                 results[index] = f"Error getting move: {str(e)}"
         
         # Use ThreadPoolExecutor for concurrent requests
-        max_workers = min(len(all_messages), 30)  # Limit concurrent requests
+        max_workers = min(len(all_messages), 100)  # Limit concurrent requests
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for i, messages in enumerate(all_messages):
