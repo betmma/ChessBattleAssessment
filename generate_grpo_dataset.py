@@ -3,12 +3,67 @@ import os
 import sys
 import argparse
 from tqdm import tqdm
+import multiprocessing as mp
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from games import GameByName, Games
 from agents.universal_minimax_agent import UniversalMinimaxAgent
+
+# --- Multiprocessing helpers ---
+_MINIMAX_AGENT = None
+_MAX_DEPTH = None
+
+def _init_minimax_worker(max_depth: int):
+    """Initializer for each worker process to create a Minimax agent once."""
+    global _MINIMAX_AGENT, _MAX_DEPTH
+    _MAX_DEPTH = max_depth
+    if max_depth and max_depth > 0:
+        _MINIMAX_AGENT = UniversalMinimaxAgent(max_depth=max_depth)
+    else:
+        _MINIMAX_AGENT = None
+
+
+def _compute_entry_for_board(task):
+    """Worker function to compute action rewards and prompts for a single board.
+    Args:
+        task: Tuple (game_name: str, board_str: str)
+    Returns:
+        dataset_entry dict or None if failed/filtered.
+    """
+    game_name, board_str = task
+    try:
+        # Construct game and load state
+        game_class = GameByName(game_name)
+        game = game_class()
+        game.load_state_from_representation(board_str)
+
+        # If depth disabled, skip (caller should handle non-MP path in this case)
+        if not _MAX_DEPTH or _MAX_DEPTH <= 0:
+            return None
+
+        # Compute rewards using per-process agent (fallback to on-demand if missing)
+        agent = _MINIMAX_AGENT or UniversalMinimaxAgent(max_depth=_MAX_DEPTH)
+        action_rewards = agent.get_action_rewards(game)
+
+        # Filter rewards to ensure quality
+        from ChessBattleAssessment.generate_grpo_dataset import filter_rewards  # lazy import to avoid circular on spawn
+        if not filter_rewards(action_rewards):
+            return None
+
+        # Build prompts with the same agent context
+        prompts = game.get_chat_history_for_llm(agent)
+
+        return {
+            "prompt": prompts,
+            "task": game_name,
+            "reward_model": {"ground_truth": action_rewards},
+        }
+    except Exception:
+        # Silently ignore failures in worker; main process logs counts
+        return None
+
 
 def generate_dataset(input_file: str, output_file: str, max_depth: int = 4):
     """
@@ -29,84 +84,94 @@ def generate_dataset(input_file: str, output_file: str, max_depth: int = 4):
         # Process each game type in the consolidated logs
         detailed_logs = consolidated_data.get("detailed_logs", {})
         
-        # Count total moves for progress bar
-        total_moves = 0
+        # If max_depth <= 0, keep original sequential path
+        if max_depth <= 0:
+            # Count total moves for progress bar
+            total_moves = 0
+            for game_name, game_data in detailed_logs.items():
+                games = game_data.get("games", {})
+                for game_id, game_record in games.items():
+                    total_moves += len(game_record.get("moves", []))
+            
+            processed_count = 0
+            with tqdm(total=total_moves, desc="Processing moves", unit="move") as pbar:
+                for game_name, game_data in detailed_logs.items():
+                    print(f"\nProcessing {game_name} games...")
+                    try:
+                        game_class = GameByName(game_name)
+                    except KeyError:
+                        print(f"Warning: Unknown game type {game_name}, skipping...")
+                        continue
+                    games = game_data.get("games", {})
+                    for game_id, game_record in games.items():
+                        moves = game_record.get("moves", [])
+                        for move_record in moves:
+                            pbar.update(1)
+                            board_str = move_record.get("board_before", "")
+                            if not board_str:
+                                continue
+                            board_key = f"{game_name}:{board_str}"
+                            if board_key in processed_boards:
+                                continue
+                            processed_boards.add(board_key)
+                            game = game_class()
+                            try:
+                                game.load_state_from_representation(board_str)
+                            except Exception as e:
+                                print(f"Warning: Failed to load game state for {game_name} game {game_id}: {e}")
+                                continue
+                            action_rewards = move_record.get('action_rewards', [])
+                            if not action_rewards:
+                                continue
+                            if not filter_rewards(action_rewards):
+                                continue
+                            try:
+                                prompts = game.get_chat_history_for_llm(minimax_agent)
+                            except Exception as e:
+                                print(f"Warning: Failed to get chat history for {game_name}: {e}")
+                                continue
+                            dataset_entry = {
+                                "prompt": prompts,
+                                "task": game_name,
+                                "reward_model": {"ground_truth": action_rewards},
+                            }
+                            f_out.write(json.dumps(dataset_entry) + '\n')
+                            processed_count += 1
+                            pbar.set_description(f"Processing moves (Generated: {processed_count} entries)")
+            print(f"\nTotal unique board states processed: {processed_count}")
+            return
+
+        # For max_depth > 0: build unique board tasks then process in parallel
+        tasks = []
         for game_name, game_data in detailed_logs.items():
             games = game_data.get("games", {})
             for game_id, game_record in games.items():
-                total_moves += len(game_record.get("moves", []))
-        
+                moves = game_record.get("moves", [])
+                for move_record in moves:
+                    board_str = move_record.get("board_before", "")
+                    if not board_str:
+                        continue
+                    board_key = f"{game_name}:{board_str}"
+                    if board_key in processed_boards:
+                        continue
+                    processed_boards.add(board_key)
+                    tasks.append((game_name, board_str))
+
         processed_count = 0
-        with tqdm(total=total_moves, desc="Processing moves", unit="move") as pbar:
-            for game_name, game_data in detailed_logs.items():
-                print(f"\nProcessing {game_name} games...")
-                
-                # Get the game class
-                try:
-                    game_class = GameByName(game_name)
-                except KeyError:
-                    print(f"Warning: Unknown game type {game_name}, skipping...")
-                    continue
-                
-                games = game_data.get("games", {})
-                
-                for game_id, game_record in games.items():
-                    moves = game_record.get("moves", [])
-                    
-                    for move_record in moves:
-                        pbar.update(1)
-                        board_str = move_record.get("board_before", "")
-                        
-                        if not board_str:
-                            continue
-                        
-                        # Create a unique, hashable representation of the board state
-                        board_key = f"{game_name}:{board_str}"
-                        if board_key in processed_boards:
-                            continue  # Skip if this board state has been processed
-                        
-                        processed_boards.add(board_key)
-                        processed_count += 1
-                        
-                        # Create game instance and load state from representation
-                        game = game_class()
-                        
-                        try:
-                            # Use the game's built-in method to load state from string representation
-                            game.load_state_from_representation(board_str)
-                        except Exception as e:
-                            print(f"Warning: Failed to load game state for {game_name} game {game_id}: {e}")
-                            continue
-                        
-                        # Get rewards for all possible moves using the universal minimax agent
-                        try:
-                            action_rewards = minimax_agent.get_action_rewards(game) if max_depth>0 else move_record.get('action_rewards', [])
-                        except Exception as e:
-                            print(f"Warning: Failed to get action rewards for {game_name}: {e}")
-                            continue
-                        
-                        if not filter_rewards(action_rewards): continue
-                        
-                        # Get the prompts
-                        try:
-                            prompts = game.get_chat_history_for_llm(minimax_agent)
-                        except Exception as e:
-                            print(f"Warning: Failed to get chat history for {game_name}: {e}")
-                            continue
-                        
-                        # Construct the dataset entry
-                        dataset_entry = {
-                            "prompt": prompts,
-                            "task": game_name,
-                            "reward_model": {
-                                "ground_truth": action_rewards
-                            }
-                        }
-                        
-                        f_out.write(json.dumps(dataset_entry) + '\n')
-                        
-                        # Update progress bar description with current stats
-                        pbar.set_description(f"Processing moves (Generated: {processed_count} entries)")
+        skipped_count = 0
+        num_workers = max(1, (os.cpu_count() or 1))
+
+        with tqdm(total=len(tasks), desc="Processing boards", unit="board") as pbar:
+            with mp.Pool(processes=num_workers, initializer=_init_minimax_worker, initargs=(max_depth,)) as pool:
+                # Use a reasonable chunksize for better throughput
+                for result in pool.imap_unordered(_compute_entry_for_board, tasks, chunksize=16):
+                    pbar.update(1)
+                    if result is None:
+                        skipped_count += 1
+                        continue
+                    f_out.write(json.dumps(result) + '\n')
+                    processed_count += 1
+                    pbar.set_description(f"Processing boards (Generated: {processed_count}, Skipped: {skipped_count})")
         
         print(f"\nTotal unique board states processed: {processed_count}")
 
@@ -231,9 +296,9 @@ def filter_rewards(action_rewards):
     return False
 
 if __name__ == '__main__':
-    input_file = 'evaluation_results_vllm/grpo/DrCoNi_1000.jsonl'
-    output_file = 'evaluation_results_vllm/grpo/DrCoNi_1000_d6.jsonl'
-    max_depth = 6
+    input_file = '/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/game_logs/20250813-044003_VLLMAgent_vs_VLLMAgent_CONSOLIDATED.json'
+    output_file = 'evaluation_results_vllm/grpo/DrCoNi_lv2_raw2_d4.jsonl'
+    max_depth = 4
 
     if not os.path.exists(input_file):
         print(f"Error: Input file {input_file} does not exist")

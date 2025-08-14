@@ -1,13 +1,21 @@
-# use vllm server mode:
+# use vllm server mode: (Upon test model parameters wont update, dont use)
 '''
+set VLLM_SERVER_MODE=True (below)
 unset http_proxy
 CUDA_VISIBLE_DEVICES=1 trl vllm-serve --model "/remote-home1/share/models/Qwen3-8B" --port 8001 --max_model_len 16384 --data_parallel_size 1 --enable_prefix_caching True
-
 '''
+# use multi gpu: (TCP client failed to connect/validate to host 10.176.58.107:53217 - timed out (try=1, timeout=600000ms))
+'''
+unset http_proxy
+set param "ddp_find_unused_parameters" to true
+MASTER_ADDR=127.0.0.1 MASTER_PORT=29500 NCCL_SOCKET_IFNAME=lo NCCL_NET=Socket NCCL_IB_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node 4   --rdzv_backend=c10d --rdzv_endpoint=127.0.0.1:29500 -m test_unsloth_train.py --backend gloo
 
+torchrun --nproc_per_node=4 launcher.py test_unsloth_train.py 
+'''
 # python unsloth_train.py
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
 from unsloth import FastLanguageModel
 import re
 import torch
@@ -18,14 +26,14 @@ import logging,datetime
 
 directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
-model_path = "/remote-home1/share/models/Qwen3-8B"
+model_path = "/remote-home1/yrmou/models/3games_DrCoNi_8b_battle_depth4_filter_strict_11200_fix(a)-ckpt-2000"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_1000.jsonl"
+dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_lv2_raw2_balanced.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/test_unsloth_vllm_server_mode"
+output_dir = "./outputs/DrCoNi_lv2_12000_gen6_warmup"
 
 FULL_PARAMETER_TRAINING = False
-VLLM_SERVER_MODE = True
+VLLM_SERVER_MODE = False
 
 if FULL_PARAMETER_TRAINING:
     output_dir += "_full"
@@ -91,7 +99,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     fast_inference = False if VLLM_SERVER_MODE else True, # Enable vLLM fast inference
     full_finetuning = FULL_PARAMETER_TRAINING, # full parameter 4bit + 2000 max length still oom 
     max_lora_rank = lora_rank,
-    gpu_memory_utilization = 0.5, # Reduce if out of memory 0.7->0.6 speed increased by x2?
+    gpu_memory_utilization = 0.4, # Reduce if out of memory 0.7->0.6 speed increased by x2?
 )
 
 if FULL_PARAMETER_TRAINING:
@@ -183,9 +191,10 @@ grpo_config_args={
     'num_train_epochs':5,
     'per_device_train_batch_size':1, # 
     'gradient_accumulation_steps':1,
-    'learning_rate':3e-5,
+    'learning_rate':1e-5,
     'optim': "adamw_8bit",
-    'num_generations':8, 
+    # 'lr_scheduler_type':'constant',
+    'num_generations':6, 
     'logging_steps':10,
     'save_steps':100,
     'report_to':"wandb",
@@ -197,6 +206,8 @@ grpo_config_args={
     'max_completion_length':max_seq_length - max_prompt_length,
 
     'generation_kwargs':{'max_length': max_seq_length} if FULL_PARAMETER_TRAINING else None, # full parameter uses it i dunno why
+    
+    # 'ddp_find_unused_parameters':True # multi gpu
 
     # use_liger_loss=True, # this slightly increases memory usage (^^;
     
