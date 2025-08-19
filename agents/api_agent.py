@@ -184,7 +184,7 @@ class APIAgent(Agent):
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    timeout=600
+                    timeout=3600
                 )
                 results[index] = response.choices[0].message.content
             except Exception as e:
@@ -192,7 +192,7 @@ class APIAgent(Agent):
                 results[index] = f"Error getting move: {str(e)}"
         
         # Use ThreadPoolExecutor for concurrent requests
-        max_workers = min(len(all_messages), 100)  # Limit concurrent requests
+        max_workers = min(len(all_messages), 200)  # Limit concurrent requests
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for i, messages in enumerate(all_messages):

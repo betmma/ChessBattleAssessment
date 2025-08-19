@@ -150,7 +150,7 @@ class Game(ABC):
         """
         from agents.minimax_agent import MinimaxAgent
         if not hasattr(self.__class__, '_minimax_agent'): # each class has an independent minimax agent, instead of each game instance
-            self.__class__._minimax_agent = MinimaxAgent()
+            self.__class__._minimax_agent = MinimaxAgent(depth=1)
         return self.__class__._minimax_agent.get_action_rewards(self)
 
     @abstractmethod

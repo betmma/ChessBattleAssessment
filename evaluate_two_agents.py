@@ -25,7 +25,7 @@ except ImportError:
 def parse_args():
     parser = argparse.ArgumentParser(description="Two Agent Battle Evaluation for Multiple Games")
     parser.add_argument("--num_games", type=int, default=50, help="Number of games to evaluate per game type")
-    parser.add_argument("--game", type=str, default="all", 
+    parser.add_argument("--game", type=str, nargs='+', default="all", 
                         choices=list(Games.keys()) + ["all"],
                         help="Game to evaluate (choose from available games or 'all' for all games)")
     
@@ -116,11 +116,11 @@ def main():
     
     # Determine which games to run
     games_to_run = []
-    if args.game == "all":
+    if 'all' in args.game:
         games_to_run = list(Games.keys())
         logger.info(f"Running evaluation for ALL games: {games_to_run}")
     else:
-        games_to_run = [args.game]
+        games_to_run = args.game
         logger.info(f"Running evaluation for game: {args.game}")
     
     logger.info(f"Starting two-agent battle evaluation: {args.agent1} vs {args.agent2}")

@@ -4,6 +4,6 @@ evaluation_results_vllm/
 myCheatSheet.txt
 grpo/outputs
 grpo/wandb
-debug/*
+*/debug/*
 unsloth_compiled_cache/
 *.lock

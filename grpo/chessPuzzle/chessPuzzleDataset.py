@@ -30,6 +30,9 @@ class ChessPuzzleDataset:
         self.k_factor = k_factor
         self.elo_range = elo_range
         self.elo_update_lock = threading.Lock() # For thread-safe Elo updates in a real training env
+        # Cache to ensure the same index always returns the same puzzle/sample during the dataset's lifetime
+        self._index_cache = {}
+        self._cache_lock = threading.Lock()
 
         # Preprocess data
         self._load_and_preprocess_data()
@@ -113,15 +116,28 @@ class ChessPuzzleDataset:
         # Add side to move and castling rights for full context
         side_to_move = "White to move." if board.turn == chess.WHITE else "Black to move."
         castling_rights = board.castling_xfen()
+        castling_description = {
+            'K': 'White can castle kingside',
+            'Q': 'White can castle queenside',
+            'k': 'Black can castle kingside',
+            'q': 'Black can castle queenside'
+        }
+        castling_rights = ', '.join([desc for key, desc in castling_description.items() if key in castling_rights]) or "No castling rights available."
         
         description = "Board state:\n" + "\n".join(description_parts)
         description += f"\n\n{side_to_move}"
-        description += f"\nCastling rights (fen code): {castling_rights}"
+        description += f"\nCastling rights: {castling_rights}"
 
         return description
     
     def __getitem__(self, index):
         """Yields puzzle samples formatted for the training program."""
+        # If we've already generated a sample for this index, return it to ensure determinism per index.
+        with self._cache_lock:
+            cached = self._index_cache.get(index)
+        if cached is not None:
+            return cached
+
         while True:
             # 1. Select a puzzle based on the current model Elo
             target_elo_bin = (int(self.model_elo) // 50) * 50
@@ -149,8 +165,8 @@ class ChessPuzzleDataset:
             board_description = self._fen_to_text(player_fen)
             # 3. Format the sample as specified
             prompt = [
-                {"role": "system", "content": "You are a chess puzzle solver. Analyze the position and provide the best move in UCI format. For example: e2e4."},
-                {"role": "user", "content": f"Solve the following chess puzzle: {board_description}"}
+                {"role": "system", "content": "You are a chess puzzle solver. Analyze the position and provide the best move in algebraic notation (SAN). Examples: Nf3, Qxe5+, O-O, e8=Q#. Reply with only the move."},
+                {"role": "user", "content": f"Solve the following chess puzzle (answer in SAN): {board_description}"}
             ]
             
             # Pack ground truth info for the reward function
@@ -162,7 +178,10 @@ class ChessPuzzleDataset:
                 }
             }
             
-            return {"prompt": prompt, "reward_model": reward_model_data}
+            sample = {"prompt": prompt, "reward_model": reward_model_data}
+            with self._cache_lock:
+                self._index_cache[index] = sample
+            return sample
 
     def update_elo(self, puzzle_elo: int, score: float):
         """

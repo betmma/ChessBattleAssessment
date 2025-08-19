@@ -1,6 +1,6 @@
 # python unsloth_train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 from unsloth import FastLanguageModel
 import re
 import torch
@@ -11,10 +11,10 @@ import logging,datetime
 
 directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
-model_path = "/remote-home1/share/models/Qwen3-8B"
+model_path = "/remote-home1/yrmou/models/Qwen3-8B-unsloth-bnb-4bit"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
 
-output_dir = "./outputs/lichess_puzzle_10000"
+output_dir = "./outputs/lichess_puzzle_16000"
 
 FULL_PARAMETER_TRAINING = False
 
@@ -53,16 +53,16 @@ if CHECK_AFTER_APPLY_CHAT_TEMPLATE:
 # 2. Load Dataset
 from chessPuzzle.chessPuzzleDataset import ChessPuzzleDataset
 csv_path = "/remote-home1/yrmou/chessPuzzle/lichess_db_puzzle.csv"
-dataset=ChessPuzzleDataset(csv_path, initial_model_elo=800, k_factor=32, elo_range=100)
+dataset=ChessPuzzleDataset(csv_path, initial_model_elo=400, k_factor=4, elo_range=100)
 
 # 3. Load Tokenizer and Model
-max_seq_length = 10000 # Can increase for longer reasoning traces
+max_seq_length = 16000 # Can increase for longer reasoning traces
 max_prompt_length = 800 # Maximum length of the prompt
 lora_rank = 32
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name = model_path,
     max_seq_length = max_seq_length,
-    load_in_4bit = False, # 'NoneType' object has no attribute 'absmax' if true. unsloth issue #2910
+    load_in_4bit = True, # 'NoneType' object has no attribute 'absmax' if true. unsloth issue #2910
     load_in_8bit= False, # RuntimeError: CUDA driver error: invalid argument
     fast_inference = True, # Enable vLLM fast inference
     full_finetuning = FULL_PARAMETER_TRAINING, # full parameter 4bit + 2000 max length still oom 
@@ -124,65 +124,81 @@ def reward_function(
 
     # Regex to find a UCI move (e.g., e2e4, a7a8q)
     uci_move_pattern = re.compile(r'\b([a-h][1-8][a-h][1-8][qrbn]?)\b')
+    # Regex to find a SAN move (captures, promotions, checks/mates, castles)
+    san_move_pattern = re.compile(r"\b(?:O-O(?:-O)?[+#]?|[PNBRQK]?[a-h]?[1-8]?x?[a-h][1-8](?:=[NBRQ])?[+#]?)\b")
 
     for i, completion_dict in enumerate(completions):
         completion_text = completion_dict[0]['content']
-        thinkBegin=completion_text.count('<think>')
-        thinkEnd=completion_text.count('</think>')
+        thinkBegin = completion_text.count('<think>')
+        thinkEnd = completion_text.count('</think>')
         afterThink = ""
-        if thinkBegin==1 and thinkEnd==1:
-            afterThink=completion_text.split('</think>')[-1].strip().replace(' ','')
-            
+        if thinkBegin == 1 and thinkEnd == 1:
+            afterThink = completion_text.split('</think>')[-1].strip().replace(' ', '')
+
         current_ground_truth = reward_models[i]['ground_truth']
-        solution_move = current_ground_truth['solution_move']
+        solution_move = current_ground_truth['solution_move']  # ground truth in UCI
         puzzle_elo = current_ground_truth['puzzle_elo']
         player_fen = current_ground_truth['player_fen']
 
         logging.info(f"--- Sample {i} in Batch ---")
         logging.info(f"Model Completion: '{completion_text.strip()}'")
-        logging.info(f"Ground Truth Move: {solution_move}, Puzzle Elo: {puzzle_elo}")
+        logging.info(f"Ground Truth Move (UCI): {solution_move}, Puzzle Elo: {puzzle_elo}")
 
-        # Find the first valid UCI move in the completion
-        match = uci_move_pattern.findall(afterThink)
-        score=None
+        reward = INVALID_FORMAT_REWARD
+        score = None
 
-        if match:
-            model_move = match[-1]  # Take the last found move to avoid picking up moves in reasoning traces2
-            logging.info(f"Extracted move: {model_move}")
-            if model_move == solution_move:
-                # Correct move
+        # 1) Try to extract SAN and convert to UCI
+        san_matches = san_move_pattern.findall(afterThink)
+        model_move_uci = None
+        if san_matches:
+            board_for_san = chess.Board(player_fen)
+            for san in reversed(san_matches):  # Prefer the last SAN-like token
+                try:
+                    move_obj = board_for_san.parse_san(san)
+                    model_move_uci = move_obj.uci()
+                    logging.info(f"Extracted SAN: {san} -> UCI: {model_move_uci}")
+                    break
+                except Exception:
+                    continue
+
+        # 2) If SAN failed, fallback to UCI extraction directly
+        if model_move_uci is None:
+            uci_matches = uci_move_pattern.findall(afterThink)
+            if uci_matches:
+                model_move_uci = uci_matches[-1]
+                logging.info(f"Extracted UCI: {model_move_uci}")
+
+        if model_move_uci is not None:
+            if model_move_uci == solution_move:
                 reward = CORRECT_REWARD
                 score = 1.0
                 logging.info(f"Result: CORRECT. Reward: {reward}")
             else:
-                board = chess.Board(player_fen)
-                move_obj = chess.Move.from_uci(model_move)
-                
+                try:
+                    board = chess.Board(player_fen)
+                    move_obj = chess.Move.from_uci(model_move_uci)
+                except chess.InvalidMoveError:
+                    move_obj = None
+
                 if move_obj in board.legal_moves:
                     board.push(move_obj)
                     if board.is_checkmate():
-                        # It's a valid, alternative checkmate!
                         reward = CORRECT_REWARD
                         score = 1.0
                         logging.info(f"Result: CORRECT (alternative checkmate found). Reward: {reward}")
                     else:
-                        # It was a legal move, but incorrect.
                         reward = INCORRECT_REWARD
                         score = 0.0
                         logging.info(f"Result: INCORRECT (legal move but not a winning one). Reward: {reward}")
                 else:
-                    # The extracted move was syntactically valid (UCI) but illegal in the position.
                     reward = INCORRECT_REWARD
                     score = 0.0
                     logging.info(f"Result: INCORRECT (illegal move for this position). Reward: {reward}")
         else:
-            # No valid move format found
-            reward = INVALID_FORMAT_REWARD
-            score = None
             logging.info(f"Result: INVALID FORMAT. Reward: {reward}")
 
-        # Update the model's Elo rating via the dataset instance. Don't update when in invalid format (be cut off due to length limit)
-        if score:
+        # Update the model's Elo rating via the dataset instance. Skip on invalid format
+        if score is not None:
             dataset.update_elo(puzzle_elo, score)
         rewards.append(reward)
 
@@ -194,16 +210,18 @@ from trl import GRPOTrainer, GRPOConfig
 grpo_config = GRPOConfig(
     output_dir=output_dir,
     num_train_epochs=1,
-    per_device_train_batch_size=1, # 
-    gradient_accumulation_steps=1,
+    per_device_train_batch_size=2, # 
+    gradient_accumulation_steps=1, # unsloth bug, must be 1
     learning_rate=1e-5,
     lr_scheduler_type='constant',
     optim = "adamw_8bit",
-    num_generations=8,  # this doesn't affect memory. batch 4, prompt 512, completion 1024, 79gb; 3-512-1024- 66gb; 1-1024-4096-72gb. unsloth 1-1024-5000-72gb. with adamw_8bit 8000-73gb
-    logging_steps=10,
+    num_generations=2,  
+    generation_batch_size=8,
+    mask_truncated_completions=True,
+    logging_steps=5,
     save_steps=100,
     report_to="wandb",
-    run_name=output_dir.split('/')[-1],
+    run_name='chessPuzzle/'+output_dir.split('/')[-1],
     remove_unused_columns=False, # Keep 'reward_model' column for the reward function
 
     # Key change: max_length is removed. Use max_prompt_length and max_completion_length
@@ -229,7 +247,7 @@ class EloLoggingGRPOTrainer(GRPOTrainer):
     """
     A custom GRPOTrainer that logs the model's Elo rating to wandb.
     """
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: Dict[str, float], start_time) -> None:
         """
         Overrides the log method to add the current model Elo to the logs.
         This method is called by the trainer at each logging step.
@@ -243,7 +261,7 @@ class EloLoggingGRPOTrainer(GRPOTrainer):
         
         # Call the parent's log method to handle the actual logging
         # to the console, wandb, etc.
-        super().log(logs)
+        super().log(logs, start_time)
         
 
 trainer = EloLoggingGRPOTrainer(
