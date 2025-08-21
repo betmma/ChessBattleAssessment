@@ -10,8 +10,10 @@ from contextlib import contextmanager
 import multiprocessing as mp
 from multiprocessing import Pool
 import traceback
+from datetime import datetime
 
 from evaluate_board_game import BoardGameBalanceEvaluator
+
 folder = '/root/myr/genGames/0803/games'
 output_folder = '/root/myr/genGames/0803/eval'
 success_folder = '/root/myr/genGames/0803/successGames'
@@ -61,13 +63,27 @@ def evaluate_single_game(game_class_info):
     Evaluate a single game class. This function will be run in parallel.
     
     Args:
-        game_class_info: tuple of (game_class, folder, output_folder, success_folder, TIME_LIMIT)
+        game_class_info: tuple of (module_name, class_name, folder, output_folder, success_folder, TIME_LIMIT)
+                         Backward-compat: (game_class, folder, output_folder, success_folder, TIME_LIMIT)
     
     Returns:
         tuple: (game_name, status, results_data, summary_data)
     """
-    game_class, folder, output_folder, success_folder, TIME_LIMIT = game_class_info
-    game_name = game_class.__name__
+    # Unpack and import in the worker to be spawn-safe
+    if isinstance(game_class_info[0], str):
+        module_name, class_name, folder, output_folder, success_folder, TIME_LIMIT = game_class_info
+        sys.path.insert(0, folder)
+        try:
+            module = __import__(module_name, fromlist=[class_name])
+            game_class = getattr(module, class_name)
+        except Exception as e:
+            print(f"Worker failed to import {module_name}.{class_name}: {e}")
+            return (class_name, BasicResultStatus.FAILED_TO_IMPORT.value, None, None)
+    else:
+        game_class, folder, output_folder, success_folder, TIME_LIMIT = game_class_info
+        class_name = game_class.__name__
+
+    game_name = class_name
     
     # Add process-level timeout protection
     import time
@@ -84,6 +100,7 @@ def evaluate_single_game(game_class_info):
             results = evaluator.evaluate_all_metrics(game_class)
 
         summary = evaluator.format_summary(results)
+        os.makedirs(output_folder, exist_ok=True)
         output_path = evaluator.save_results(results, os.path.join(output_folder, f"{game_name}_evaluation.json"))
         
         # Analyze results to determine status
@@ -149,10 +166,14 @@ def evaluate_single_game(game_class_info):
         else:
             status = BasicResultStatus.SUCCESS.value
             # Save the game class source code to success folder
-            with open(os.path.join(folder, f"{game_name}.py"), 'r') as f:
-                game_code = f.read()
-            with open(os.path.join(success_folder, f"{game_name}.py"), 'w') as f:
-                f.write(game_code)
+            try:
+                with open(os.path.join(folder, f"{game_name}.py"), 'r') as f:
+                    game_code = f.read()
+                os.makedirs(success_folder, exist_ok=True)
+                with open(os.path.join(success_folder, f"{game_name}.py"), 'w') as f:
+                    f.write(game_code)
+            except Exception:
+                pass
         
         return (game_name, status, results, summary)
         
@@ -169,94 +190,121 @@ def evaluate_single_game(game_class_info):
         return (game_name, status, None, None)
 
 
-for _, module_name, _ in pkgutil.iter_modules([folder]):
-    gameClassName = module_name
-    try:
-        module = __import__(f'{gameClassName}', fromlist=[gameClassName])
-        gameClass = getattr(module, gameClassName)
-        gameClasses.append(gameClass)
-    except Exception as e:
-        print(f"Error importing {gameClassName}: {e}")
-        finalResults[gameClassName] = BasicResultStatus.FAILED_TO_IMPORT.value
+def evaluate_games_in_folder(folder: str, output_folder: str, success_folder: str, TIME_LIMIT: int = 300, num_processes: int | None = None):
+    """Programmatically evaluate all games in a folder using multiprocessing.
 
-config = Config()
-config.LOG_ACTION_REWARDS=False
-config.LOG_LEVEL= logging.FATAL
-# evaluator = BoardGameBalanceEvaluator(config=config, num_games=30, depth=3)  # Moved to worker function
-all_results = []
-all_summaries = []
-from datetime import datetime
-TIME_LIMIT = 300 
-
-# Prepare arguments for multiprocessing
-game_args = [(game_class, folder, output_folder, success_folder, TIME_LIMIT) 
-             for game_class in gameClasses]
-
-# Determine number of processes (use fewer processes to avoid hanging)
-num_processes = max(1, min(127, len(gameClasses)))  # Limit to 2 processes max
-print(f"Using {num_processes} processes for parallel evaluation")
-
-# Use multiprocessing to evaluate games in parallel
-if __name__ == "__main__":
+    Returns a dict of {game_name: status} and writes progress/summary to output_folder.
+    """
     import time
-    mp.set_start_method('spawn', force=True)  # Ensure compatibility
-    
+    os.makedirs(folder, exist_ok=True)
+    os.makedirs(output_folder, exist_ok=True)
+    os.makedirs(success_folder, exist_ok=True)
+
+    # Discover game modules (assume class name == module name)
+    sys.path.insert(0, folder)
+    module_names = []
+    finalResults = {}
+
+    for _, module_name, _ in pkgutil.iter_modules([folder]):
+        module_names.append(module_name)
+
+    # Prepare arguments for multiprocessing: pass names, import inside worker
+    game_args = [(name, name, folder, output_folder, success_folder, TIME_LIMIT) for name in module_names]
+
+    # Determine number of processes
+    if num_processes is None:
+        num_processes = max(1, min(mp.cpu_count(), len(game_args)))
+
+    print(f"Using {num_processes} processes for parallel evaluation")
+
+    # Use multiprocessing to evaluate games in parallel
+    results_list = []
     start_time = time.time()
-    print(f"Starting evaluation of {len(gameClasses)} games...")
-    
-    # Use imap_unordered with timeout for better control
-    with Pool(processes=num_processes) as pool:
+
+    if len(game_args) > 0:
+        # Set start method once
+        if mp.get_start_method(allow_none=True) is None:
+            mp.set_start_method('spawn')
         try:
-            # Use imap_unordered to get results as they complete
-            results_iter = pool.imap_unordered(evaluate_single_game, game_args)
-            
-            # Collect results with a global timeout
+            with Pool(processes=num_processes) as pool:
+                try:
+                    results_iter = pool.imap_unordered(evaluate_single_game, game_args)
+                    completed = 0
+                    for result in results_iter:
+                        results_list.append(result)
+                        completed += 1
+                        elapsed = time.time() - start_time
+                        game_name = result[0]
+                        status = result[1]
+                        text=f"[{completed}/{len(game_args)}] Completed {game_name}: {status} (elapsed: {elapsed:.1f}s)"
+                        with open(os.path.join(output_folder, "progress.txt"), 'a') as f:
+                            f.write(text + '\n')
+                        print(text)
+                        distribution = Counter([r[1] for r in results_list])
+                        print("\nDistribution of results:")
+                        for s, count in distribution.items():
+                            print(f"{s}: {count}")
+                except KeyboardInterrupt:
+                    print("Interrupted by user. Terminating pool...")
+                    pool.terminate()
+                except Exception as e:
+                    print(f"Error during multiprocessing: {e}")
+                    pool.terminate()
+                finally:
+                    pool.join()
+        except RuntimeError as e:
+            # Start method already set in this interpreter
+            print(f"RuntimeError initializing multiprocessing (non-fatal): {e}")
             results_list = []
-            completed = 0
-            
-            for result in results_iter:
-                results_list.append(result)
-                completed += 1
-                elapsed = time.time() - start_time
-                game_name = result[0]
-                status = result[1]
-                text=f"[{completed}/{len(gameClasses)}] Completed {game_name}: {status} (elapsed: {elapsed:.1f}s)"
-                with open(os.path.join(output_folder, "progress.txt"), 'a') as f:
-                    f.write(text + '\n')
-                    print(text)
-                
-                distribution = Counter([r[1] for r in results_list])
-                print("\nDistribution of results:")
-                for status, count in distribution.items():
-                    print(f"{status}: {count}")
-                
-        except Exception as e:
-            print(f"Error during multiprocessing: {e}")
-            # Try to terminate the pool gracefully
-            pool.terminate()
-            pool.join()
-            results_list = []
-    
+    else:
+        print("No game modules found to evaluate.")
+
     total_time = time.time() - start_time
     print(f"Total evaluation time: {total_time:.2f} seconds")
-    
-    # Process results
+
+    all_results = []
+    all_summaries = []
     for game_name, status, results, summary in results_list:
         finalResults[game_name] = status
         if results is not None:
             all_results.append(results)
         if summary is not None:
             all_summaries.append(summary)
-if all_results:
-    # Save summary to separate file
-    summary_path = os.path.join(output_folder, f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-    with open(summary_path, 'w') as f:
-        f.write('\n'.join(all_summaries))
 
-for game_name, status in finalResults.items():
-    print(f"{game_name}: {status}")
+    if all_summaries:
+        summary_path = os.path.join(output_folder, f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        with open(summary_path, 'w') as f:
+            f.write('\n'.join(all_summaries))
 
-distribution = Counter(finalResults.values())
-print("\nDistribution of results:")
-for status, count in distribution.items():
-    print(f"{status}: {count}")
+    for game_name, status in finalResults.items():
+        print(f"{game_name}: {status}")
+
+    distribution = Counter(finalResults.values())
+    print("\nDistribution of results:")
+    for status, count in distribution.items():
+        print(f"{status}: {count}")
+
+    return finalResults
+
+
+if __name__ == "__main__":
+    # Default paths under debug/
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    base = os.path.join(project_root, 'debug', f'batch_eval_{ts}')
+    games_folder = os.path.join(base, 'games')
+    out_folder = os.path.join(base, 'eval')
+    succ_folder = os.path.join(base, 'success')
+    os.makedirs(games_folder, exist_ok=True)
+    os.makedirs(out_folder, exist_ok=True)
+    os.makedirs(succ_folder, exist_ok=True)
+
+    # Optional CLI args: folder out_folder success_folder time_limit processes
+    args = sys.argv[1:]
+    if len(args) >= 1: games_folder = args[0]
+    if len(args) >= 2: out_folder = args[1]
+    if len(args) >= 3: succ_folder = args[2]
+    time_limit = int(args[3]) if len(args) >= 4 else 300
+    processes = int(args[4]) if len(args) >= 5 else None
+
+    evaluate_games_in_folder(games_folder, out_folder, succ_folder, time_limit, processes)

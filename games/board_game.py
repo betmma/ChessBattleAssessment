@@ -30,7 +30,7 @@ class BoardGame(Game):
     move_arity: int
     player_symbols = {1: 'X', -1: 'O', 0: '.'} # Player symbols, default use is to form user prompt as seen above.
 
-    def __init_subclass__(cls, board_size: Tuple[int, ...], move_arity: int, **kwargs):
+    def __init_subclass__(cls, board_size: Tuple[int, ...]=None, move_arity: int=None, **kwargs):
         """
         Initializes the subclass with board dimensions and move arity.
 
@@ -39,14 +39,20 @@ class BoardGame(Game):
             move_arity: An integer defining the number of elements in a move tuple.
         """
         super().__init_subclass__(**kwargs)
-        cls.board_size = board_size
-        cls.move_arity = move_arity
+        if not hasattr(cls, 'board_size'):
+            if board_size is None:
+                raise ValueError('Class {cls.__name__} does not have board_size defined.')
+            cls.board_size = board_size
+        if not hasattr(cls, 'move_arity'):
+            if move_arity is None:
+                raise ValueError('Class {cls.__name__} does not have move_arity defined.')
+            cls.move_arity = move_arity
         if not hasattr(cls, 'game_introduction'):
             raise ValueError(
                 f"Subclasses of BoardGame must define a 'game_introduction' class attribute. "
                 f"Class {cls.__name__} does not have it defined."
             )
-        move_format= f"({', '.join([chr(97 + i) for i in range(move_arity)])})"
+        move_format= f"({', '.join([chr(97 + i) for i in range(cls.move_arity)])})"
         cls.system_prompt = cls.system_prompt.format(game_name=cls.name, game_introduction=cls.game_introduction, move_format=move_format)
         cls.system_prompt_no_thinking = cls.system_prompt_no_thinking.format(game_name=cls.name, game_introduction=cls.game_introduction, move_format=move_format)
 
