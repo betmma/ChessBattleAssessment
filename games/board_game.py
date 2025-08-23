@@ -28,7 +28,7 @@ class BoardGame(Game):
     )
     board_size: Tuple[int, ...]
     move_arity: int
-    player_symbols = {1: 'X', -1: 'O', 0: '.'} # Player symbols, default use is to form user prompt as seen above.
+    player_symbols = {}#{1: 'X', -1: 'O', 0: '.'} # Player symbols, default use is to form user prompt as seen above.
 
     def __init_subclass__(cls, board_size: Tuple[int, ...]=None, move_arity: int=None, **kwargs):
         """
@@ -80,50 +80,37 @@ class BoardGame(Game):
         Loads the game state from a string representation, assuming the format
         from the base Game.get_state_representation method.
         """
-        try:
-            parts = state_str.strip().split('\n')
-            
-            # Determine where the board representation ends
-            board_lines = []
-            i = 0
-            for i, line in enumerate(parts):
-                if line.startswith("Current turn:"):
-                    break
-                board_lines.append(line)
-            else: # if no break
-                i = len(parts)
+        parts = state_str.strip().split('\n')
+        
+        # Determine where the board representation ends
+        board_lines = []
+        i = 0
+        for i, line in enumerate(parts):
+            if line.startswith("Current turn:"):
+                break
+            board_lines.append(line)
+        else: # if no break
+            i = len(parts)
 
-            board_repr_str = "\n".join(board_lines)
-            
-            # Reconstruct board from string
-            board_rows = [row.split() for row in board_repr_str.split('\n')]
-            
-            # Validate dimensions
-            if len(self.board_size) == 2:
-                rows, cols = self.board_size
-                if len(board_rows) != rows or not all(len(r) == cols for r in board_rows):
-                    return False
-            elif len(self.board_size) == 1:
-                if len(board_rows) != 1 or len(board_rows[0]) != self.board_size[0]:
-                    return False
-            else: # Not 1D or 2D
-                return False
+        board_repr_str = "\n".join(board_lines)
+        
+        # Reconstruct board from string
+        board_rows = [row.split() for row in board_repr_str.split('\n')]
 
-            symbol_to_player = {v: k for k, v in self.player_symbols.items()}
-            self.board = np.array([[symbol_to_player.get(s, 0) for s in row] for row in board_rows], dtype=int).reshape(self.board_size)
+        symbol_to_player = {v: k for k, v in self.player_symbols.items()}
+        toint=lambda s:symbol_to_player[s] if s in symbol_to_player else int(s)
+        self.board = np.array([[toint(s) for s in row] for row in board_rows], dtype=int).reshape(self.board_size)
 
-            # Find and parse the current player line
-            player_line_found = False
-            for line in parts[i:]:
-                match = re.search(r"Current turn: . \(plays as (-?\d+)\)", line)
-                if match:
-                    self.current_player = int(match.group(1))
-                    player_line_found = True
-                    break
-            
-            return player_line_found
-        except Exception:
-            return False
+        # Find and parse the current player line
+        player_line_found = False
+        for line in parts[i:]:
+            match = re.search(r"Current turn: . \(plays as (-?\d+)\)", line)
+            if match:
+                self.current_player = int(match.group(1))
+                player_line_found = True
+                break
+        
+        return player_line_found
 
     def _get_player_symbol(self, player_value: Any) -> str:
         """Returns the symbol for a given player."""

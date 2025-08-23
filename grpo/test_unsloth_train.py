@@ -26,11 +26,11 @@ import logging,datetime
 
 directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
-model_path = "/remote-home1/yrmou/models/3games_DrCoNi_8b_battle_depth4_filter_strict_11200_fix(a)-ckpt-2000"
+model_path = "/remote-home1/yrmou/models/DrCoNi_lv2_12000-ckpt-1900"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_lv2_raw2_balanced.jsonl"
+dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_lv3_raw_d6_balanced.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/DrCoNi_lv2_12000_gen6_warmup"
+output_dir = "./outputs/DrCoNi_lv3_12000_gen6"
 
 FULL_PARAMETER_TRAINING = False
 VLLM_SERVER_MODE = False
@@ -129,6 +129,7 @@ else:
 
 # 4. Custom Reward Function
 invalidReward=-2000
+MULTIPLE_REWARD_FUNCTIONS=False # i thought if using different functions for each game, trl can log rewards for each game. but it seems that only reward function that returns value for all instances (like format reward that applies to all) can be logged. so this should be False, otherwise these will just be NaN loggings
 def get_reward_function(task_name):
     def reward_function(prompts, completions, task, completion_ids, **reward_kwargs):
         """
@@ -146,8 +147,7 @@ def get_reward_function(task_name):
             completion=completion[0]['content']
             # The prompt that generated this completion
             current_prompt = prompts[i]
-            if task[i]!=task_name:
-                
+            if task[i]!=task_name and MULTIPLE_REWARD_FUNCTIONS:
                 rewards.append(None)
                 continue
 
@@ -182,7 +182,10 @@ def get_reward_function(task_name):
         return rewards
     reward_function.__name__ = f"{task_name}_reward_function"
     return reward_function
-reward_functions=[get_reward_function(task) for task in tasks]
+if MULTIPLE_REWARD_FUNCTIONS:
+    reward_functions = [get_reward_function(task) for task in tasks]
+else:
+    reward_functions = [get_reward_function('games')]
 
 # 5. GRPO Configuration with vLLM
 from trl import GRPOTrainer, GRPOConfig
@@ -193,7 +196,7 @@ grpo_config_args={
     'gradient_accumulation_steps':1,
     'learning_rate':1e-5,
     'optim': "adamw_8bit",
-    # 'lr_scheduler_type':'constant',
+    'lr_scheduler_type':'constant',
     'num_generations':6, 
     'logging_steps':10,
     'save_steps':100,

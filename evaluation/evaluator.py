@@ -65,15 +65,16 @@ class EvaluationLogger:
             "forfeits_agent1": 0, "forfeits_agent2": 0
         }
 
-    def log_game_initialization(self, game_id: int, agent1_player_value: int, agent2_player_value: int):
+    def log_game_initialization(self, game_id: int, agent1_player_value: int, agent2_player_value: int, game_name: Optional[str] = None):
         self.game_logs_data["games"][str(game_id)] = {
             "agent1_player_value": agent1_player_value,
             "agent2_player_value": agent2_player_value,
+            "game_name": game_name or self.game_class_name,
             "moves": [],
             "outcome": None,
             "final_board": None
         }
-        logging.debug(f"Logger: Initialized game {game_id}: {self.agent1_name}({agent1_player_value}) vs {self.agent2_name}({agent2_player_value})")
+        logging.debug(f"Logger: Initialized game {game_id}: {self.agent1_name}({agent1_player_value}) vs {self.agent2_name}({agent2_player_value}) on {game_name or self.game_class_name}")
 
     def log_move_attempt(self, game_id: int, agent_tag: str, board_before: Any, move_input: Any, 
                          parsed_move: Optional[Any], is_valid: bool, retry_count: int, 
@@ -219,11 +220,15 @@ class GameRunner:
         """Returns data for each game's initialization, for logging purposes."""
         init_data = []
         for gs in self.game_states:
-            init_data.append({
+            entry = {
                 "game_id": gs.game_id,
                 "agent1_player_value": gs.agent1_player_value,
                 "agent2_player_value": gs.agent2_player_value
-            })
+            }
+            game_name = getattr(gs, 'game_class_name', getattr(self.game_class, 'name', None))
+            if game_name is not None:
+                entry["game_name"] = game_name
+            init_data.append(entry)
         return init_data
 
     def process_one_turn(self) -> List[Dict]:
@@ -346,6 +351,48 @@ class GameRunner:
     def get_completed_game_count(self) -> int:
         return sum(1 for gs in self.game_states if gs.is_complete)
 
+class MultiGameRunner(GameRunner):
+    """Manages multiple game classes in a single evaluation run to maximize batching."""
+    def __init__(self, agent1, agent2, game_specs: List[Tuple[Any, int]], retry_limit: int, config: Config):
+        # game_specs: List of (game_class, num_games)
+        self.agent1 = agent1
+        self.agent2 = agent2
+        self.game_specs = game_specs
+        self.num_games = sum(n for _, n in game_specs)
+        self.retry_limit = retry_limit
+        self.config = config
+        self.game_states: List[GameState] = []
+        # Ensure attribute exists to avoid attribute errors from base class utilities
+        self.game_class = None
+        self._initialize_games()
+
+    def _initialize_games(self):
+        game_id = 0
+        for game_class, count in self.game_specs:
+            for _ in range(count):
+                new_game = game_class()
+                if random.choice([True, False]):
+                    agent1_player_value, agent2_player_value = 1, -1
+                else:
+                    agent1_player_value, agent2_player_value = -1, 1
+                gs = GameState(game_id, new_game, self.agent1, self.agent2, agent1_player_value, agent2_player_value)
+                # Attach the game class name to the state for logging purposes
+                gs.game_class_name = getattr(game_class, 'name', getattr(game_class, '__name__', str(game_class)))
+                self.game_states.append(gs)
+                game_id += 1
+
+    def get_initialization_data_for_logging(self) -> List[Dict]:
+        """Return per-game init data with correct game_name without relying on self.game_class."""
+        init_data: List[Dict] = []
+        for gs in self.game_states:
+            init_data.append({
+                "game_id": gs.game_id,
+                "agent1_player_value": gs.agent1_player_value,
+                "agent2_player_value": gs.agent2_player_value,
+                "game_name": getattr(gs, 'game_class_name', None)
+            })
+        return init_data
+
 class Evaluator:
     """High-level orchestrator for evaluating agents."""
     
@@ -371,26 +418,42 @@ class Evaluator:
 
     def evaluate_agent_vs_agent_with_logger(self, agent1, agent2, game_class, num_games: Optional[int] = None) -> Tuple[Dict, 'EvaluationLogger']:
         """
-        Evaluate one agent against another on a specific game and return both results and the logger.
-        This method is useful when you want to access the detailed logs without saving them immediately.
+        Evaluate one or multiple game classes and return both results and the logger.
+        Always treat input as a list of game classes (or list of (game_class, count)).
         """
-        num_games_to_run = num_games if num_games is not None else self.config.NUM_EVAL_GAMES
-        
-        logging.info(f"Starting evaluation: {agent1.name} vs {agent2.name} on {game_class.name} for {num_games_to_run} games.")
+        # Normalize to multi-game specification
+        if isinstance(game_class, (list, tuple)):
+            raw_specs = list(game_class)
+        else:
+            raw_specs = [game_class]
 
-        logger = EvaluationLogger(agent1.name, agent2.name, game_class.name, self.config)
-        runner = GameRunner(agent1, agent2, game_class, num_games_to_run, self.retry_limit, self.config)
+        game_specs: List[Tuple[Any, int]] = []
+        for item in raw_specs:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                gc, n = item[0], int(item[1])
+            else:
+                gc, n = item, int(num_games if num_games is not None else self.config.NUM_EVAL_GAMES)
+            game_specs.append((gc, n))
 
-        # Log initial game states
+        num_games_to_run = sum(n for _, n in game_specs)
+        game_names = ", ".join(getattr(gc, 'name', getattr(gc, '__name__', str(gc))) for gc, _ in game_specs)
+        logging.info(f"Starting evaluation: {agent1.name} vs {agent2.name} on MULTI ({game_names}) for {num_games_to_run} games.")
+
+        logger = EvaluationLogger(agent1.name, agent2.name, "MULTI", self.config)
+        runner = MultiGameRunner(agent1, agent2, game_specs, self.retry_limit, self.config)
+        desc = f"Eval: {agent1.name} vs {agent2.name} (MULTI)"
+
+        # Log initial game states (with game name per game if available)
         initial_game_data = runner.get_initialization_data_for_logging()
         for init_data in initial_game_data:
             logger.log_game_initialization(
                 game_id=init_data["game_id"],
                 agent1_player_value=init_data["agent1_player_value"],
-                agent2_player_value=init_data["agent2_player_value"]
+                agent2_player_value=init_data["agent2_player_value"],
+                game_name=init_data.get("game_name")
             )
             
-        pbar = tqdm(total=num_games_to_run, desc=f"Eval: {agent1.name} vs {agent2.name}")
+        pbar = tqdm(total=num_games_to_run, desc=desc)
         
         completed_count = 0
         while completed_count < num_games_to_run:

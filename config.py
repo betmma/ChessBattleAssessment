@@ -8,7 +8,7 @@ class Config:
     VLLM_MAX_NUM_SEQS = 4096
     VLLM_MAX_NUM_BATCHED_TOKENS = 16384
     VLLM_MAX_MODEL_LEN = 16384  # Max length of the model context
-    VLLM_GPU_MEMORY_UTILIZATION = 0.9  # GPU memory utilization for vLLM
+    VLLM_GPU_MEMORY_UTILIZATION = 0.95  # GPU memory utilization for vLLM
     
     MAX_CONCURRENT_GAMES = 500  # How many games to process in parallel logic stages
     

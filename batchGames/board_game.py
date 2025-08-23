@@ -28,7 +28,7 @@ class BoardGame(Game):
     )
     board_size: Tuple[int, ...]
     move_arity: int
-    player_symbols = {1: 'X', -1: 'O', 0: '.'} # Player symbols, default use is to form user prompt as seen above.
+    player_symbols = {1: 'X', -1: 'O', 0: '.'} # Player symbols, default use is to map items in the board, like [1, 0, -1] to "X . O". If the game does not use player symbols (like board items represent actual number, not player's pieces), this should be overridden in the subclass to {}.
 
     def __init_subclass__(cls, board_size: Tuple[int, ...], move_arity: int, **kwargs):
         """

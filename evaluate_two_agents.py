@@ -1,9 +1,10 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import logging
 import argparse
 import sys
 import math
+from types import SimpleNamespace
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -172,58 +173,87 @@ def main():
     all_results = {}
     total_games_played = 0
     
-    # Run evaluation for each game
-    for game_name in games_to_run:
-        logger.info("=" * 60)
-        logger.info(f"STARTING EVALUATION FOR {game_name.upper()}")
-        logger.info("=" * 60)
-        
-        try:
-            game_class = GameByName(game_name)
-            logger.info(f"Running {config.NUM_EVAL_GAMES} games of {game_name}: {agent1.name} vs {agent2.name}")
-            
-            # Run evaluation for this game and get both results and detailed logger
-            results, eval_logger = evaluator.evaluate_agent_vs_agent_with_logger(
-                agent1, agent2, game_class, config.NUM_EVAL_GAMES
-            )
-            
-            # Add this game's data to the consolidated logger
-            consolidated_logger.add_game_evaluation_data(game_name, eval_logger, results)
-            
-            all_results[game_name] = results
-            total_games_played += config.NUM_EVAL_GAMES
-            
-            # Log results for this game with confidence intervals
-            if isinstance(results, dict) and "error" not in results:
-                agent1_wins = results.get('wins_agent1', 0)
-                agent2_wins = results.get('wins_agent2', 0)
-                draws = results.get('draws', 0)
-                valid_games_this_round = agent1_wins + agent2_wins + draws
-                
-                if valid_games_this_round > 0:
-                    agent1_rate = (agent1_wins / valid_games_this_round) * 100
-                    agent2_rate = (agent2_wins / valid_games_this_round) * 100
-                    draw_rate = (draws / valid_games_this_round) * 100
-                    
-                    agent1_ci = calculate_wilson_ci(agent1_wins, valid_games_this_round)
-                    agent2_ci = calculate_wilson_ci(agent2_wins, valid_games_this_round)
-                    draw_ci = calculate_wilson_ci(draws, valid_games_this_round)
-                    
-                    logger.info(f"Results for {game_name}:")
-                    logger.info(f"  Agent1 wins: {agent1_wins}/{valid_games_this_round} ({agent1_rate:.1f}%, 95% CI: {agent1_ci[0]:.1f}%-{agent1_ci[1]:.1f}%)")
-                    logger.info(f"  Agent2 wins: {agent2_wins}/{valid_games_this_round} ({agent2_rate:.1f}%, 95% CI: {agent2_ci[0]:.1f}%-{agent2_ci[1]:.1f}%)")
-                    logger.info(f"  Draws: {draws}/{valid_games_this_round} ({draw_rate:.1f}%, 95% CI: {draw_ci[0]:.1f}%-{draw_ci[1]:.1f}%)")
-                else:
-                    logger.info(f"Results for {game_name}: {results}")
+    # Run one multi-game evaluation covering all selected game types
+    try:
+        game_classes = [GameByName(name) for name in games_to_run]
+        overall_results, eval_logger = evaluator.evaluate_agent_vs_agent_with_logger(
+            agent1, agent2, game_classes, config.NUM_EVAL_GAMES
+        )
+
+        # Aggregate per-game-type summaries from the unified logger
+        per_game_acc = {}
+        games_logs = eval_logger.game_logs_data.get("games", {})
+        for gid, ginfo in games_logs.items():
+            gname = ginfo.get("game_name") or eval_logger.game_class_name
+            outcome = ginfo.get("outcome")
+            acc = per_game_acc.setdefault(gname, {
+                "wins_agent1": 0, "wins_agent2": 0, "draws": 0,
+                "forfeits_agent1": 0, "forfeits_agent2": 0, "total_games": 0,
+                "agent1_name": agent1.name, "agent2_name": agent2.name, "game_name": gname
+            })
+            acc["total_games"] += 1
+            if outcome == "agent1_win":
+                acc["wins_agent1"] += 1
+            elif outcome == "agent2_win":
+                acc["wins_agent2"] += 1
+            elif outcome == "draw":
+                acc["draws"] += 1
+            elif outcome == "agent1_forfeit":
+                acc["forfeits_agent1"] += 1
+            elif outcome == "agent2_forfeit":
+                acc["forfeits_agent2"] += 1
             else:
-                logger.info(f"Results for {game_name}: {results}")
-            
-        except Exception as e:
-            logger.error(f"Failed to run evaluation for {game_name}: {e}")
+                # unknown or None, count towards total but not specific bucket
+                pass
+        
+        # Compute rates and push into consolidated logger with filtered logs per game
+        for gname, res in per_game_acc.items():
+            total = res["total_games"]
+            valid_completed = total - res["forfeits_agent1"] - res["forfeits_agent2"]
+            res["win_rate_agent1"] = (res["wins_agent1"] / valid_completed) if valid_completed > 0 else 0
+            res["win_rate_agent2"] = (res["wins_agent2"] / valid_completed) if valid_completed > 0 else 0
+            res["draw_rate"] = (res["draws"] / valid_completed) if valid_completed > 0 else 0
+
+            # Prepare filtered detailed logs for this game
+            filtered_games = {gid: g for gid, g in games_logs.items() if (g.get("game_name") or eval_logger.game_class_name) == gname}
+            filtered_log_data = {
+                **eval_logger.game_logs_data,
+                "game": gname,
+                "games": filtered_games
+            }
+            filtered_logger = SimpleNamespace(game_logs_data=filtered_log_data)
+
+            # Add to consolidated logger and local tracking
+            consolidated_logger.add_game_evaluation_data(gname, filtered_logger, res)
+            all_results[gname] = res
+            total_games_played += total
+
+            # Log results for this game with confidence intervals
+            agent1_wins = res.get('wins_agent1', 0)
+            agent2_wins = res.get('wins_agent2', 0)
+            draws = res.get('draws', 0)
+            valid_games_this_round = agent1_wins + agent2_wins + draws
+            if valid_games_this_round > 0:
+                agent1_rate = (agent1_wins / valid_games_this_round) * 100
+                agent2_rate = (agent2_wins / valid_games_this_round) * 100
+                draw_rate = (draws / valid_games_this_round) * 100
+                agent1_ci = calculate_wilson_ci(agent1_wins, valid_games_this_round)
+                agent2_ci = calculate_wilson_ci(agent2_wins, valid_games_this_round)
+                draw_ci = calculate_wilson_ci(draws, valid_games_this_round)
+                logger.info(f"Results for {gname}:")
+                logger.info(f"  Agent1 wins: {agent1_wins}/{valid_games_this_round} ({agent1_rate:.1f}%, 95% CI: {agent1_ci[0]:.1f}%-{agent1_ci[1]:.1f}%)")
+                logger.info(f"  Agent2 wins: {agent2_wins}/{valid_games_this_round} ({agent2_rate:.1f}%, 95% CI: {agent2_ci[0]:.1f}%-{agent2_ci[1]:.1f}%)")
+                logger.info(f"  Draws: {draws}/{valid_games_this_round} ({draw_rate:.1f}%, 95% CI: {draw_ci[0]:.1f}%-{draw_ci[1]:.1f}%)")
+            else:
+                logger.info(f"Results for {gname}: {res}")
+
+    except Exception as e:
+        logger.error(f"Failed to run multi-game evaluation: {e}")
+        for game_name in games_to_run:
             all_results[game_name] = {"error": str(e)}
     
     # Save consolidated logs to file
-    if games_to_run and len([r for r in all_results.values() if "error" not in r]) > 0:
+    if games_to_run and len([r for r in all_results.values() if isinstance(r, dict) and "error" not in r]) > 0:
         consolidated_log_path = consolidated_logger.save_consolidated_logs_to_file()
         consolidated_summary_path = consolidated_logger.save_consolidated_summary_report()
         logger.info(f"Consolidated logs saved to: {consolidated_log_path}")
@@ -250,7 +280,6 @@ def main():
             logger.info(f"{game_name:>15}: ERROR - {results['error']}")
             continue
             
-        # Show detailed results with confidence intervals for each game
         if isinstance(results, dict):
             agent1_wins = results.get('wins_agent1', 0)
             agent2_wins = results.get('wins_agent2', 0)
@@ -266,7 +295,6 @@ def main():
         else:
             logger.info(f"{game_name:>15}: {results}")
         
-        # Add to totals (assuming results dict has these keys)
         if isinstance(results, dict):
             total_agent1_wins += results.get('wins_agent1', 0)
             total_agent2_wins += results.get('wins_agent2', 0)
@@ -280,14 +308,12 @@ def main():
     logger.info(f"Draws: {total_draws}")
     logger.info(f"Forfeits: {total_forfeits}")
     
-    # Calculate win rates
     valid_games = total_agent1_wins + total_agent2_wins + total_draws
     if valid_games > 0:
         agent1_win_rate = (total_agent1_wins / valid_games) * 100
         agent2_win_rate = (total_agent2_wins / valid_games) * 100
         draw_rate = (total_draws / valid_games) * 100
         
-        # Calculate 95% confidence intervals
         agent1_ci = calculate_wilson_ci(total_agent1_wins, valid_games)
         agent2_ci = calculate_wilson_ci(total_agent2_wins, valid_games)
         draw_ci = calculate_wilson_ci(total_draws, valid_games)

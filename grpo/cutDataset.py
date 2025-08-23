@@ -1,10 +1,10 @@
 # keep N rows per game for top k games with most rows
 import json, collections
 
-file='../evaluation_results_vllm/grpo/DrCoNi_lv2_raw2_d4.jsonl'
-newFile='../evaluation_results_vllm/grpo/DrCoNi_lv2_raw2_d4_balanced.jsonl'
+file='../evaluation_results_vllm/grpo/DrCoNi_lv3_raw_d6.jsonl'
+newFile='../evaluation_results_vllm/grpo/DrCoNi_lv3_raw_d6_balanced.jsonl'
 k=3
-N=322
+N=536
 #######
 with open(file, 'r') as f:
     data = [json.loads(line) for line in f]
