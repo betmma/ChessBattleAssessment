@@ -13,7 +13,6 @@ class Mut48(BoardGame, board_size=(4, 4), move_arity=2):
     The game ends when no cell has at least 1 token. The last player to make a move wins.
     Move format: (row, column), where row and column are 0-based integers.
     """
-    player_symbols = {1: 'A', -1: 'B', 0: '.'}  # Example symbols for players; actual board shows token counts as numbers
 
     def _create_initial_board(self) -> np.ndarray:
         return np.full(self.board_size, 3, dtype=int)

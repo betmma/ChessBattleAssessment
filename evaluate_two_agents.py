@@ -27,7 +27,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Two Agent Battle Evaluation for Multiple Games")
     parser.add_argument("--num_games", type=int, default=50, help="Number of games to evaluate per game type")
     parser.add_argument("--game", type=str, nargs='+', default="all", 
-                        choices=list(Games.keys()) + ["all"],
                         help="Game to evaluate (choose from available games or 'all' for all games)")
     
     # Agent 1 configuration
@@ -117,7 +116,10 @@ def main():
     
     # Determine which games to run
     games_to_run = []
-    if 'all' in args.game:
+    if '/' in args.game[0]: # folder
+        from utils.load_games_in_folder import load_games_in_folder
+        games_to_run=load_games_in_folder(args.game[0])
+    elif 'all' in args.game:
         games_to_run = list(Games.keys())
         logger.info(f"Running evaluation for ALL games: {games_to_run}")
     else:
@@ -175,7 +177,9 @@ def main():
     
     # Run one multi-game evaluation covering all selected game types
     try:
-        game_classes = [GameByName(name) for name in games_to_run]
+        game_classes = [GameByName(name)if type(name)==str else name for name in games_to_run]
+        if type(games_to_run[0])!=str:
+            games_to_run=[cls.__name__.removesuffix('Game') for cls in game_classes]
         overall_results, eval_logger = evaluator.evaluate_agent_vs_agent_with_logger(
             agent1, agent2, game_classes, config.NUM_EVAL_GAMES
         )

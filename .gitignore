@@ -8,3 +8,4 @@ grpo/wandb
 debug/*
 unsloth_compiled_cache/
 *.lock
+adapter_config.json

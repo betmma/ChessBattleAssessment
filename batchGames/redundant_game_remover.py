@@ -17,6 +17,7 @@ import json
 import shutil
 import hashlib
 import argparse
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Set
 from collections import defaultdict
@@ -185,6 +186,7 @@ class RedundantGameRemover:
                 try:
                     game_class_name = module_name
                     module = __import__(game_class_name, fromlist=[game_class_name])
+                    game_class_name=re.sub(r'gen_\d+_','',game_class_name)
                     game_class = getattr(module, game_class_name)
                     game_classes.append(game_class)
                     print(f"Loaded game class: {game_class_name}")
@@ -271,8 +273,9 @@ class RedundantGameRemover:
     
     def _copy_unique_games(self, unique_games: List[Any]):
         """Copy unique game files to output directory"""
+        from inspect import getmodule
         for game_class in unique_games:
-            source_file = self.input_dir / f"{game_class.__name__}.py"
+            source_file = getmodule(game_class).__file__
             dest_file = self.output_dir / f"{game_class.__name__}.py"
             
             try:

@@ -240,63 +240,110 @@ class GameRunner:
         agent_to_process_this_turn: Optional[Any] = None
         # Find the first active game and identify its current agent. This will be our target agent for this turn.
         for gs_check in active_game_states:
-            if gs_check.game.is_game_over():
+            # Guard each game status check to isolate faulty game objects
+            try:
+                if gs_check.game.is_game_over():
+                    gs_check.is_complete = True
+                    continue
+            except Exception as e:  # Permission: added try/except for robustness against faulty game implementations
+                logging.error(f"GameRunner: Game {gs_check.game_id} is_game_over() raised exception: {e}. Forfeiting game.")
                 gs_check.is_complete = True
-            
-            current_agent, _, _ = gs_check.get_current_agent_info()
+                gs_check.forfeit_by_agent_tag = 'agent1'  # default attribution; cannot determine safely
+                continue
+            try:
+                current_agent, _, _ = gs_check.get_current_agent_info()
+            except Exception as e:
+                logging.error(f"GameRunner: Game {gs_check.game_id} get_current_agent_info() failed: {e}. Forfeiting game.")
+                gs_check.is_complete = True
+                gs_check.forfeit_by_agent_tag = 'agent1'
+                continue
             agent_to_process_this_turn = current_agent
-            break 
+            break
 
         if not agent_to_process_this_turn:
-            return events_for_logger # Should be empty if all games were completed above
+            return events_for_logger
 
         contexts_for_selected_agent: List[Dict] = []
-        for gs in active_game_states: # Iterate again over potentially updated active_game_states
+        for gs in active_game_states:
             if len(contexts_for_selected_agent) >= self.config.MAX_CONCURRENT_GAMES:
                 logging.debug(f"GameRunner: Reached MAX_CONCURRENT_GAMES ({self.config.MAX_CONCURRENT_GAMES}) for {agent_to_process_this_turn.name}")
                 break
-
-            current_agent_in_gs, player_value, agent_tag = gs.get_current_agent_info()
-            
+            try:
+                current_agent_in_gs, player_value, agent_tag = gs.get_current_agent_info()
+            except Exception as e:
+                logging.error(f"GameRunner: Game {gs.game_id} get_current_agent_info() failed mid-batch: {e}. Forfeiting game.")
+                gs.is_complete = True
+                gs.forfeit_by_agent_tag = 'agent1'
+                continue
             if current_agent_in_gs == agent_to_process_this_turn:
                 contexts_for_selected_agent.append({
                     'game': gs.game, 'player_value': player_value, 'game_id': gs.game_id,
                     'game_state_obj': gs, 'agent_tag': agent_tag,
                     'agent_display_name': agent_to_process_this_turn.name
                 })
-        
         if not contexts_for_selected_agent:
             logging.debug(f"GameRunner: No active, non-completed games found for {agent_to_process_this_turn.name} in this pass.")
-            return events_for_logger 
+            return events_for_logger
 
         logging.debug(f"GameRunner: Getting moves for {len(contexts_for_selected_agent)} games from {agent_to_process_this_turn.name}")
-        
-        moves = agent_to_process_this_turn.get_batch_moves(contexts_for_selected_agent)
+        try:
+            moves = agent_to_process_this_turn.get_batch_moves(contexts_for_selected_agent)
+        except Exception as e:  # Batch-level failure: forfeit only affected games
+            logging.error(f"GameRunner: Batch move generation failed for {agent_to_process_this_turn.name}: {e}. Forfeiting affected games and continuing.")
+            for context in contexts_for_selected_agent:
+                gs = context['game_state_obj']
+                if gs.is_complete:
+                    continue
+                try:
+                    gs.game.force_forfeit()
+                except Exception as inner_e:
+                    logging.debug(f"GameRunner: Game {gs.game_id} force_forfeit() raised: {inner_e}")
+                gs.forfeit_by_agent_tag = context['agent_tag']
+                gs.is_complete = True
+                events_for_logger.append({
+                    "type": "move_attempt", "game_id": gs.game_id, "agent_tag": context['agent_tag'],
+                    "board_before": None, "move_input": None, "parsed_move": None, "is_valid": False,
+                    "retry_count": self.retry_limit, "result_status": "forfeit", "raw_output": "ERROR_BATCH_MOVE",
+                    "action_rewards": None
+                })
+            return events_for_logger
 
         for idx, move_input in enumerate(moves):
             context = contexts_for_selected_agent[idx]
             gs: GameState = context['game_state_obj']
             agent_tag: str = context['agent_tag']
             agent_display_name: str = context['agent_display_name']
-
-            if gs.is_complete: # Check again, game might have completed due to external factors or other logic not present here
+            if gs.is_complete:
                 continue
-            
             move_event = self._apply_move_to_game(gs, move_input, agent_tag, agent_display_name)
-            events_for_logger.append(move_event) # Only move_attempt events now
-
-            if gs.game.is_game_over(): # If move resulted in game over
+            events_for_logger.append(move_event)
+            try:
+                if gs.game.is_game_over():
+                    gs.is_complete = True
+            except Exception as e:
+                logging.error(f"GameRunner: Game {gs.game_id} is_game_over() post-move raised: {e}. Marking complete.")
                 gs.is_complete = True
-                # game_completion event will be logged by Evaluator
-        
         return events_for_logger
 
     def _apply_move_to_game(self, game_state: GameState, move_input: Any, agent_tag: str, agent_display_name: str) -> Dict:
         """Applies a move to a game and returns a move event dictionary for logging."""
         game = game_state.game
-        board_before = game.get_state_representation()
-        
-        # Get action rewards before making the move (if config enables it)
+        try:
+            board_before = game.get_state_representation()
+        except Exception as e:
+            logging.error(f"GameRunner: Game {game_state.game_id} get_state_representation() failed: {e}. Forfeiting game.")
+            game_state.forfeit_by_agent_tag = agent_tag
+            game_state.is_complete = True
+            try:
+                game.force_forfeit()
+            except Exception:
+                pass
+            return {
+                "type": "move_attempt", "game_id": game_state.game_id, "agent_tag": agent_tag,
+                "board_before": None, "move_input": move_input, "parsed_move": None,
+                "is_valid": False, "retry_count": self.retry_limit, "result_status": "forfeit",
+                "raw_output": str(move_input), "action_rewards": None
+            }
         action_rewards = None
         if self.config.LOG_ACTION_REWARDS:
             try:
@@ -304,43 +351,58 @@ class GameRunner:
             except Exception as e:
                 logging.warning(f"GameRunner: Game {game_state.game_id}: Failed to get action rewards: {e}")
                 action_rewards = None
-        
         parsed_move = None
         is_valid_move = False
-        result_status = "continued" # "retry", "forfeit", "continued"
-
-        if move_input is None:
-            game_state.increment_retry_count()
-            logging.debug(f"GameRunner: Game {game_state.game_id}: {agent_display_name} made invalid move (None), retry {game_state.retry_count}/{self.retry_limit}")
-            if game_state.retry_count >= self.retry_limit:
-                logging.warning(f"GameRunner: Game {game_state.game_id}: {agent_display_name} exceeded retry limit, forfeiting.")
-                game.force_forfeit() # Game itself handles who forfeits based on current player
-                game_state.forfeit_by_agent_tag = agent_tag
-                game_state.is_complete = True
-                result_status = "forfeit"
-            else:
-                result_status = "retry"
-        else:
-            parsed_move = game.parse_move_from_output(str(move_input))
-            if parsed_move is not None:
-                is_valid_move = game.make_move(parsed_move) # This applies the move
-            
-            if is_valid_move:
-                game_state.reset_retry_count()
-                logging.debug(f"GameRunner: Game {game_state.game_id}: {agent_display_name} successfully made move {parsed_move}")
-                result_status = "continued"
-            else: # Invalid move or failed parse
+        result_status = "continued"
+        try:
+            if move_input is None:
                 game_state.increment_retry_count()
-                logging.debug(f"GameRunner: Game {game_state.game_id}: {agent_display_name} made invalid move {move_input}, retry {game_state.retry_count}/{self.retry_limit}")
+                logging.debug(f"GameRunner: Game {game_state.game_id}: {agent_display_name} made invalid move (None), retry {game_state.retry_count}/{self.retry_limit}")
                 if game_state.retry_count >= self.retry_limit:
                     logging.warning(f"GameRunner: Game {game_state.game_id}: {agent_display_name} exceeded retry limit, forfeiting.")
-                    game.force_forfeit()
+                    try:
+                        game.force_forfeit()
+                    except Exception:
+                        pass
                     game_state.forfeit_by_agent_tag = agent_tag
                     game_state.is_complete = True
                     result_status = "forfeit"
                 else:
                     result_status = "retry"
-        
+            else:
+                parsed_move = game.parse_move_from_output(str(move_input))
+                if parsed_move is not None:
+                    is_valid_move = game.make_move(parsed_move)
+                if is_valid_move:
+                    game_state.reset_retry_count()
+                    logging.debug(f"GameRunner: Game {game_state.game_id}: {agent_display_name} successfully made move {parsed_move}")
+                    result_status = "continued"
+                else:
+                    game_state.increment_retry_count()
+                    logging.debug(f"GameRunner: Game {game_state.game_id}: {agent_display_name} made invalid move {move_input}, retry {game_state.retry_count}/{self.retry_limit}")
+                    if game_state.retry_count >= self.retry_limit:
+                        logging.warning(f"GameRunner: Game {game_state.game_id}: {agent_display_name} exceeded retry limit, forfeiting.")
+                        try:
+                            game.force_forfeit()
+                        except Exception:
+                            pass
+                        game_state.forfeit_by_agent_tag = agent_tag
+                        game_state.is_complete = True
+                        result_status = "forfeit"
+                    else:
+                        result_status = "retry"
+        except Exception as e:
+            logging.error(f"GameRunner: Game {game_state.game_id}: Exception during move application ({agent_display_name}): {e}. Forfeiting game.")
+            try:
+                game.force_forfeit()
+            except Exception:
+                pass
+            game_state.forfeit_by_agent_tag = agent_tag
+            game_state.is_complete = True
+            result_status = "forfeit"
+            is_valid_move = False
+            parsed_move = None
+            game_state.retry_count = self.retry_limit
         return {
             "type": "move_attempt", "game_id": game_state.game_id, "agent_tag": agent_tag,
             "board_before": board_before, "move_input": move_input, "parsed_move": parsed_move,

@@ -7,7 +7,6 @@ class Mut153Game(BoardGame, board_size=(3, 3), move_arity=2):
     game_introduction = """
     Mutation 153 is a 2-player abstract strategy game played on a 3x3 board. Each cell starts with a value of 3. On your turn, you select a cell to mutate. To mutate a cell, all adjacent cells must have at least 1. When you mutate a cell, its value increases by 1, and each adjacent cell's value decreases by 1. The game ends when no legal moves remain. The last player to make a move wins.
     """
-    player_symbols = {1: 'X', -1: 'O', 0: '.'}  # Default symbols, not used in representation
 
     def _create_initial_board(self) -> np.ndarray:
         return np.full(self.board_size, 3, dtype=int)

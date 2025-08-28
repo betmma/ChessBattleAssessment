@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 import time
@@ -16,14 +16,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from batchGames.batch_eval_games import evaluate_games_in_folder, BasicResultStatus
 
 # --- Config ---
-MODEL_PATH = '/remote-home1/share/models/Qwen3-32B'
+MODEL_PATH = '/remote-home1/yrmou/models/DrCoNi_lv2_12000-ckpt-1900'#'/remote-home1/share/models/Qwen3-8B'#'/remote-home1/yrmou/models/DrCoNi_lv2_12000-ckpt-1900'
 MAX_MODEL_LEN = 16384
 TEMPERATURE = 0.7
 TOP_P = 0.95
 TOP_K = 40
 MAX_TOKENS = 16384
-POP_SIZE = 200
-ELITE_K = 20
+POP_SIZE = 500
+ELITE_K = 50
 GENERATIONS = 5
 TIME_LIMIT_PER_GAME = 240
 PROCESSES = None  # auto
@@ -33,16 +33,20 @@ RUN_TS = datetime.now().strftime('%Y%m%d_%H%M%S')
 RUN_BASE = PROJECT_ROOT / 'debug' / f'evo_games_{RUN_TS}'
 (GENERATION_DIR := RUN_BASE / 'generations').mkdir(parents=True, exist_ok=True)
 (RUN_BASE / 'logs').mkdir(parents=True, exist_ok=True)
+# Snapshot this script into the run folder
+SNAPSHOT_PATH = RUN_BASE / Path(__file__).name
+if not SNAPSHOT_PATH.exists():
+    shutil.copy2(Path(__file__).resolve(), SNAPSHOT_PATH)
 
 # Load board game base class
-BOARD_GAME_PATH = PROJECT_ROOT / 'games' / 'board_game.py'
+BOARD_GAME_PATH = PROJECT_ROOT / 'batchGames' / 'board_game.py'
 with open(BOARD_GAME_PATH, 'r') as f:
     BOARD_GAME_CODE = f.read()
 
 # Initialize tokenizer and LLM
 print(f"Loading model from {MODEL_PATH}")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-llm = LLM(model=MODEL_PATH, max_model_len=MAX_MODEL_LEN, tensor_parallel_size=2)
+llm = LLM(model=MODEL_PATH, max_model_len=MAX_MODEL_LEN, tensor_parallel_size=1)
 sampling_params = SamplingParams(temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K, max_tokens=MAX_TOKENS)
 
 SYSTEM_PROMPT = "You are a game designer and expert programmer."
@@ -115,10 +119,7 @@ def apply_chat(system_prompt, user_prompt, thinking=True):
     )
 
 
-def generate_candidates(seed_words, out_dir):
-    prompts = []
-    for w in seed_words:
-        prompts.append(BASE_USER_PROMPT + w)
+def generate_candidates(prompts, out_dir):
     texts = [apply_chat(SYSTEM_PROMPT, p, thinking=True) for p in prompts]
     outputs = llm.generate(texts, sampling_params)
     results = []
@@ -142,8 +143,8 @@ def sanitize_and_save_candidates(results, games_dir):
     games_dir.mkdir(parents=True, exist_ok=True)
     kept = []
     seen_names = set()
-    for _, gen in results:
-        gen=gen.split('</think>')[-1].strip()
+    for prompt, gen in results:
+        gen = gen.split('</think>')[-1].strip()
         if any(bad.lower() in gen.lower() for bad in BANNED_PHRASES):
             continue
         # Extract code block containing import header
@@ -169,7 +170,7 @@ def sanitize_and_save_candidates(results, games_dir):
         file_path = games_dir / f"{class_name}.py"
         with open(file_path, 'w') as f:
             f.write(code)
-        kept.append((class_name, file_path))
+        kept.append((class_name, file_path, prompt))
     return kept
 
 
@@ -204,28 +205,56 @@ def compute_fitness(status_map, eval_dir):
 
 
 def mutate_prompt(prompt):
+    # Remove previous refinement line if present to avoid accumulation
+    base = re.sub(r"(?:\n)?Refine with this constraint:.*", "", prompt, flags=re.DOTALL).rstrip()
     tweak = random.choice(MUTATION_INSTRUCTIONS)
-    return prompt + "\nRefine with this constraint: " + tweak
+    return base + "\nRefine with this constraint: " + tweak
 
 
-def select_and_breed(prompts, status_map, fitness, k):
-    # Map class_name back to prompt by parsing class name from gens is hard; here we random sample top ones
-    # Use fitness ranking mapped by name substring if present; fallback to random
+def create_next_generation_prompts(kept, fitness, k):
+    # Rank by fitness
     ranked = sorted(fitness.items(), key=lambda x: x[1], reverse=True)
-    top_names = set([n for n, _ in ranked[:k]])
-    # Keep prompts that mention class names; otherwise keep best k prompts by position
-    survivors = prompts[:k]
-    # Mutate to fill back to POP_SIZE
-    children = []
-    while len(survivors) + len(children) < POP_SIZE:
-        base = random.choice(survivors)
-        children.append(mutate_prompt(base))
-    return survivors + children
+    kept_map = {cn: (fp, prompt) for (cn, fp, prompt) in kept}
+    survivors = []
+    for name, _ in ranked:
+        if name in kept_map:
+            survivors.append(name)
+        if len(survivors) >= k:
+            break
+    if not survivors:
+        return []
+    new_prompts = []
+    for name in survivors:
+        fp, _old_prompt = kept_map[name]
+        with open(fp, 'r') as f:
+            code = f.read()
+        mut1 = random.choice(MUTATION_INSTRUCTIONS)
+        base_instr = (
+            "You will mutate an existing BoardGame subclass into a NEW distinct game. "
+            "Keep average branching near 10 and length near 20 turns. Provide ONLY the new class code block. "
+            "Rename the class (different from original). Do not duplicate unchanged code; meaningfully alter rules. "
+            f"Apply the mutation goal: {mut1}.\n"
+            "Original class code below between backticks; do NOT output it verbatim, output the mutated version only starting with required imports and the new class.\n" \
+            "```\n" + code + "\n```\n"
+        )
+        new_prompts.append(base_instr)
+    # Fill population with children built from survivor codes
+    while len(new_prompts) < POP_SIZE:
+        parent_name = random.choice(survivors)
+        fp, _ = kept_map[parent_name]
+        with open(fp, 'r') as f:
+            code = f.read()
+        mut = random.choice(MUTATION_INSTRUCTIONS)
+        child_prompt = (
+            "Mutate the following game again focusing on: " + mut + "\n" +
+            "Return ONLY mutated class (new class name) with required imports.\n```\n" + code + "\n```\n"
+        )
+        new_prompts.append(child_prompt)
+    return new_prompts[:POP_SIZE]
 
 
 def main():
     random.seed(42)
-    # Seed words
     if os.path.exists(WORDS_PATH):
         with open(WORDS_PATH, 'r') as f:
             words = f.read().splitlines()
@@ -234,8 +263,8 @@ def main():
             'entropy', 'lattice', 'cascade', 'flux', 'cipher', 'quorum', 'oracle', 'quiver', 'tessellate', 'ember',
             'delta', 'sigma', 'zenith', 'aperture', 'keystone', 'axiom', 'braid', 'glyph', 'matrix', 'quanta'
         ]
-    population_words = random.sample(words, POP_SIZE)
-    prompts = [BASE_USER_PROMPT + w for w in population_words]
+    seed_terms = random.sample(words, POP_SIZE)
+    prompts = [BASE_USER_PROMPT + w for w in seed_terms]
 
     for gen in range(GENERATIONS):
         gen_dir = GENERATION_DIR / f'gen_{gen:02d}'
@@ -244,15 +273,11 @@ def main():
         succ_dir = gen_dir / 'success'
         (gen_dir / 'raw').mkdir(parents=True, exist_ok=True)
         print(f"=== Generation {gen} ===")
-        # Generate
-        results = generate_candidates([w for w in population_words], gen_dir)
-        # Save prompts
+        results = generate_candidates(prompts, gen_dir)
         with open(gen_dir / 'prompts.json', 'w') as f:
             json.dump([p for p, _ in results], f, indent=2)
-        # Materialize games
         kept = sanitize_and_save_candidates(results, games_dir)
         print(f"Saved {len(kept)} candidate games to {games_dir}")
-        # Evaluate safely
         try:
             status_map = evaluate_population(games_dir, eval_dir, succ_dir)
         except KeyboardInterrupt:
@@ -262,19 +287,29 @@ def main():
             print(f"Evaluation failed for generation {gen}: {e}")
             with open(gen_dir / 'error.txt', 'w') as f:
                 f.write(str(e))
-            # Do not create a new generation on failure
             break
         with open(gen_dir / 'status.json', 'w') as f:
             json.dump(status_map, f, indent=2)
-        # Fitness
         fitness = compute_fitness(status_map, eval_dir)
         with open(gen_dir / 'fitness.json', 'w') as f:
             json.dump(fitness, f, indent=2)
-        # Prepare next gen prompts
-        prompts = select_and_breed(prompts, status_map, fitness, ELITE_K)
-        # Update seed words for logging/debug
-        population_words = [f"mut_{i}" for i in range(len(prompts))]
+        if gen < GENERATIONS - 1:
+            prompts = create_next_generation_prompts(kept, fitness, ELITE_K)
+            if not prompts:
+                # Fallback to fresh seeds if nothing survived
+                seed_terms = random.sample(words, POP_SIZE)
+                prompts = [BASE_USER_PROMPT + w for w in seed_terms]
 
+    # Aggregate all success games into a single folder
+    all_success_dir = RUN_BASE / 'all_success'
+    all_success_dir.mkdir(parents=True, exist_ok=True)
+    for gen in range(GENERATIONS):
+        gen_success = GENERATION_DIR / f'gen_{gen:02d}' / 'success'
+        if gen_success.exists():
+            for game_file in gen_success.glob('*.py'):
+                target = all_success_dir / f"{gen_success.parent.name}_{game_file.name}"
+                if not target.exists():
+                    shutil.copy2(game_file, target)
     print(f"Run completed. Artifacts in {RUN_BASE}")
 
 

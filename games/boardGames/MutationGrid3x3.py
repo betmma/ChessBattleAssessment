@@ -8,7 +8,7 @@ class MutationGrid3x3(BoardGame, board_size=(3, 3), move_arity=2):
     game_introduction = """
 Mutation Grid 3x3 is an abstract strategy game played on a 3x3 grid. Each cell starts with the value 1. On your turn, select a cell (row, column). The selected cell's value decreases by 1, while each of its adjacent cells (up, down, left, right) increases by 1. A move is only legal if, after applying it, no cell exceeds the maximum value of 3. The game ends when a player cannot make a legal move. The last player to successfully make a move wins the game.
 """
-    player_symbols = {1: 'P1', -1: 'P2'}  # Not used in representation; overridden in get_board_representation_for_llm
+
 
     def get_board_representation_for_llm(self) -> str:
         if self.board.ndim == 1:

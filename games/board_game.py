@@ -97,7 +97,7 @@ class BoardGame(Game):
         # Reconstruct board from string
         board_rows = [row.split() for row in board_repr_str.split('\n')]
 
-        symbol_to_player = {v: k for k, v in self.player_symbols.items()}
+        symbol_to_player = {v: k for k, v in self.player_symbols.items()}|{'.':0,'A':1,'X':1,'B':-1}
         toint=lambda s:symbol_to_player[s] if s in symbol_to_player else int(s)
         self.board = np.array([[toint(s) for s in row] for row in board_rows], dtype=int).reshape(self.board_size)
 
@@ -114,7 +114,9 @@ class BoardGame(Game):
 
     def _get_player_symbol(self, player_value: Any) -> str:
         """Returns the symbol for a given player."""
-        return self.player_symbols.get(player_value, '?')
+        if player_value in self.player_symbols:
+            return self.player_symbols[player_value]
+        return {1:'First Player', -1:'Second Player'}.get(player_value, str(player_value))
 
     def parse_move_from_output(self, raw_output: str) -> Optional[Any]:
         """Parses a move from the raw output of an agent, enforcing move arity."""

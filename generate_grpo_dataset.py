@@ -94,7 +94,7 @@ def recalculate_rewards_from_jsonl(input_jsonl:str, output_jsonl:str, new_max_de
     print(f"\nRecalculation complete!\nTotal entries processed: {processed}\nTotal entries skipped: {skip}\nUpdated dataset saved to: {output_jsonl}")
 
 if __name__=='__main__':
-    input_file='/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/game_logs/20250822-125526_VLLMAgent_vs_VLLMAgent_CONSOLIDATED.json'
+    input_file='/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/game_logs/20250823-225028_API Agent (Qwen3-8B)_vs_API Agent (Qwen3-8B)_CONSOLIDATED.json'
     max_depth=8
     output_file=f'evaluation_results_vllm/grpo/32bgames_depth{max_depth}.jsonl'
     if not os.path.exists(input_file): print(f'Error: Input file {input_file} does not exist'); sys.exit(1)

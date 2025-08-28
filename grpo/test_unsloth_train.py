@@ -14,7 +14,7 @@ torchrun --nproc_per_node=4 launcher.py test_unsloth_train.py
 '''
 # python unsloth_train.py
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 from unsloth import FastLanguageModel
 import re
@@ -26,11 +26,11 @@ import logging,datetime
 
 directory = os.path.dirname(os.path.abspath(__file__))
 # 1. Configuration
-model_path = "/remote-home1/yrmou/models/DrCoNi_lv2_12000-ckpt-1900"
+model_path = "/remote-home1/share/models/Qwen3-8B"
 model_path = os.path.normpath(os.path.join(directory, model_path) if not os.path.isabs(model_path) else model_path)
-dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/DrCoNi_lv3_raw_d6_balanced.jsonl"
+dataset_path = "/remote-home1/yrmou/ChessBattleAssessment/evaluation_results_vllm/grpo/32bgames_depth8.jsonl"
 dataset_path = os.path.normpath(os.path.join(directory, dataset_path) if not os.path.isabs(dataset_path) else dataset_path)
-output_dir = "./outputs/DrCoNi_lv3_12000_gen6"
+output_dir = "./outputs/32bgames_12000_gen6"
 
 FULL_PARAMETER_TRAINING = False
 VLLM_SERVER_MODE = False

@@ -1,6 +1,6 @@
 import json, collections
 
-file='../evaluation_results_vllm/grpo/DrCoNi_lv2_raw2_balanced.jsonl'
+file='../evaluation_results_vllm/grpo/32bgames_depth8.jsonl'
 with open(file, 'r') as f:
     data = [json.loads(line) for line in f]
 print(f"Total entries: {len(data)}")

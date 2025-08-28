@@ -191,16 +191,15 @@ def evaluate_single_game(game_class_info):
 
 
 def evaluate_games_in_folder(folder: str, output_folder: str, success_folder: str, TIME_LIMIT: int = 300, num_processes: int | None = None):
-    """Programmatically evaluate all games in a folder using multiprocessing.
+    """Programmatically evaluate all games in a folder using supervised subprocesses.
 
-    Returns a dict of {game_name: status} and writes progress/summary to output_folder.
+    Ensures no indefinite hang: each game runs in its own Process with a hard wall clock watchdog.
     """
     import time
     os.makedirs(folder, exist_ok=True)
     os.makedirs(output_folder, exist_ok=True)
     os.makedirs(success_folder, exist_ok=True)
 
-    # Discover game modules (assume class name == module name)
     sys.path.insert(0, folder)
     module_names = []
     finalResults = {}
@@ -208,66 +207,88 @@ def evaluate_games_in_folder(folder: str, output_folder: str, success_folder: st
     for _, module_name, _ in pkgutil.iter_modules([folder]):
         module_names.append(module_name)
 
-    # Prepare arguments for multiprocessing: pass names, import inside worker
     game_args = [(name, name, folder, output_folder, success_folder, TIME_LIMIT) for name in module_names]
 
-    # Determine number of processes
     if num_processes is None:
-        num_processes = max(1, min(mp.cpu_count(), len(game_args)))
+        import multiprocessing as mp
+        num_processes = min(max(1, min(mp.cpu_count(), len(game_args))), 32)
 
-    print(f"Using {num_processes} processes for parallel evaluation")
+    print(f"Using {num_processes} supervised processes for parallel evaluation")
 
-    # Use multiprocessing to evaluate games in parallel
+    from multiprocessing import Process, Queue
+
+    def spawn(arg):
+        q = Queue()
+        def runner(a, qout):
+            res = evaluate_single_game(a)
+            qout.put(res)
+        p = Process(target=runner, args=(arg, q))
+        p.daemon = False
+        p.start()
+        return {'proc': p, 'queue': q, 'arg': arg, 'start': time.time()}
+
     results_list = []
     start_time = time.time()
 
-    if len(game_args) > 0:
-        # Set start method once
-        if mp.get_start_method(allow_none=True) is None:
-            mp.set_start_method('spawn')
-        try:
-            with Pool(processes=num_processes) as pool:
-                try:
-                    results_iter = pool.imap_unordered(evaluate_single_game, game_args)
-                    completed = 0
-                    for result in results_iter:
-                        results_list.append(result)
-                        completed += 1
-                        elapsed = time.time() - start_time
-                        game_name = result[0]
-                        status = result[1]
-                        text=f"[{completed}/{len(game_args)}] Completed {game_name}: {status} (elapsed: {elapsed:.1f}s)"
-                        with open(os.path.join(output_folder, "progress.txt"), 'a') as f:
-                            f.write(text + '\n')
-                        print(text)
-                        distribution = Counter([r[1] for r in results_list])
-                        print("\nDistribution of results:")
-                        for s, count in distribution.items():
-                            print(f"{s}: {count}")
-                except KeyboardInterrupt:
-                    print("Interrupted by user. Terminating pool...")
-                    pool.terminate()
-                except Exception as e:
-                    print(f"Error during multiprocessing: {e}")
-                    pool.terminate()
-                finally:
-                    pool.join()
-        except RuntimeError as e:
-            # Start method already set in this interpreter
-            print(f"RuntimeError initializing multiprocessing (non-fatal): {e}")
-            results_list = []
-    else:
-        print("No game modules found to evaluate.")
+    pending = list(game_args)
+    running = []
+    completed = 0
+
+    while pending or running:
+        # Launch new processes up to limit
+        while pending and len(running) < num_processes:
+            running.append(spawn(pending.pop(0)))
+        # Check running processes
+        for entry in list(running):
+            p = entry['proc']
+            q = entry['queue']
+            arg = entry['arg']
+            game_name = arg[0]
+            elapsed_game = time.time() - entry['start']
+            hard_limit = TIME_LIMIT + 30  # grace period beyond internal timeout
+            if not p.is_alive():
+                p.join()
+                if not q.empty():
+                    res = q.get()
+                else:
+                    res = (game_name, BasicResultStatus.FAILED_TO_EVALUATE.value, None, None)
+                results_list.append(res)
+                completed += 1
+                elapsed = time.time() - start_time
+                text = f"[{completed}/{len(game_args)}] Completed {game_name}: {res[1]} (elapsed: {elapsed:.1f}s)"
+                with open(os.path.join(output_folder, "progress.txt"), 'a') as f:
+                    f.write(text + '\n')
+                print(text)
+                distribution = Counter([r[1] for r in results_list])
+                print("\nDistribution of results:")
+                for s, count in distribution.items():
+                    print(f"{s}: {count}")
+                running.remove(entry)
+            elif elapsed_game > hard_limit:
+                # Hard kill hung process
+                p.terminate()
+                p.join()
+                res = (game_name, BasicResultStatus.TIME_LIMIT_EXCEEDED.value, None, None)
+                results_list.append(res)
+                completed += 1
+                elapsed = time.time() - start_time
+                text = f"[{completed}/{len(game_args)}] Timeout kill {game_name}: {res[1]} (elapsed: {elapsed:.1f}s)"
+                with open(os.path.join(output_folder, "progress.txt"), 'a') as f:
+                    f.write(text + '\n')
+                print(text)
+                distribution = Counter([r[1] for r in results_list])
+                print("\nDistribution of results:")
+                for s, count in distribution.items():
+                    print(f"{s}: {count}")
+                running.remove(entry)
+        time.sleep(0.2)
 
     total_time = time.time() - start_time
     print(f"Total evaluation time: {total_time:.2f} seconds")
 
-    all_results = []
     all_summaries = []
     for game_name, status, results, summary in results_list:
         finalResults[game_name] = status
-        if results is not None:
-            all_results.append(results)
         if summary is not None:
             all_summaries.append(summary)
 
