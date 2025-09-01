@@ -31,7 +31,8 @@ for _, module_name, _ in pkgutil.iter_modules([board_games_path]):
         raise ImportError(f"Module '{module_name}' does not define a game class with expected names: {possibleNames}")
 
 Games = {game.__name__.removesuffix('Game'): game for game in GamesList}
-def GameByName(name: str) -> Game:
+folderGamesCache={}
+def GameByName(name: str, folder: str='') -> Game:
     """
     Get a game class by its name.
     
@@ -44,10 +45,18 @@ def GameByName(name: str) -> Game:
     Raises:
         ValueError: If the game name is not recognized.
     """
-    if name in Games:
-        return Games[name]
+    games=Games
+    if folder!='':
+        if folder in folderGamesCache:
+            games=folderGamesCache[folder]
+        else:
+            gameClasses=__import__('utils.load_games_in_folder',fromlist=['load_games_in_folder']).load_games_in_folder(folder)
+            games={game.__name__.removesuffix('Game'): game for game in gameClasses}
+            folderGamesCache[folder]=games
+    if name in games:
+        return games[name]
     else:
-        raise ValueError(f"Game '{name}' is not recognized. All available games: {list(Games.keys())}")
+        raise ValueError(f"Game '{name}' is not recognized. All available games: {list(games.keys())}")
 
 __all__ = [
     'TicTacToeGame',
