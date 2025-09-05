@@ -25,11 +25,12 @@
 #
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 import re
 import copy
 import json
-import time
+import time,datetime
 import torch
 import random
 import tempfile
@@ -46,6 +47,7 @@ from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 import bitsandbytes as bnb
 from peft import LoraConfig
 
+START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
 # ----------------------------
 # Config: server + model
 # ----------------------------
@@ -63,9 +65,15 @@ tokenizer.pad_token = tokenizer.eos_token
 SAMPLING_EXTRA = {"top_p": 0.95, "top_k": 20}
 TEMPERATURE = 0.6
 MAX_TOKENS = 16384  # you can raise this, keep server limits in mind
-PPO_MAX_TOKENS = 7500
-BATCH_GEN_LIMIT = 64  # max contexts per generation batch
+PPO_MAX_TOKENS = 6000
+BATCH_GEN_LIMIT = 256  # max contexts per generation batch
 
+@dataclass
+class RunConfig:
+    K_moves: int = 5
+    N_goals: int = 5
+    N_tries: int = 5
+    thinking: bool = True
 # --------------------------------------
 # PPO policy/value model with PEFT LoRA
 # --------------------------------------
@@ -328,12 +336,6 @@ def msg_C(game_code: str, game_obj, goal_board, remaining_moves: int, first: boo
 # ----------------------------
 # The ONE full PPO step
 # ----------------------------
-@dataclass
-class RunConfig:
-    K_moves: int = 6
-    N_goals: int = 3
-    N_tries: int = 3
-    thinking: bool = True
 
 @dataclass
 class PhaseAContext:
@@ -480,7 +482,7 @@ class PhaseCContext:
                 finalize_reward(self.parent_A.b_sample_indices_per_goal[self.goal_index], r_b)
                 if all(g is not None for g in self.parent_A.goal_success_rates):
                     var_p = float(np.var(np.array(self.parent_A.goal_success_rates), ddof=0))
-                    finalize_reward([self.parent_A.reward_idx], var_p)
+                    finalize_reward([self.parent_A.reward_idx], var_p*10)
 
 # ----------------------------
 # Queue-based infinite PPO loop (removed one_ppo_step)
@@ -515,13 +517,13 @@ if __name__ == "__main__":
                 unsent_indices.append(idx)
                 log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "reward": float(value)})
 
-    def maybe_run_ppo(force: bool = False):
-        if len(unsent_indices) >= ppo.config.batch_size or (force and unsent_indices):
-            batch_indices = unsent_indices[:ppo.config.batch_size] if not force else unsent_indices[:]
+    def maybe_run_ppo():
+        while len(unsent_indices) >= ppo.config.batch_size:
+            batch_indices = unsent_indices[:ppo.config.batch_size]
             if not batch_indices:
                 return
             # Remove selected indices from unsent list
-            remaining = unsent_indices[len(batch_indices):] if not force else []
+            remaining = unsent_indices[len(batch_indices):]
             unsent_indices.clear()
             unsent_indices.extend(remaining)
             query_ids = [to_ids(query_texts[i]) for i in batch_indices]
@@ -530,12 +532,26 @@ if __name__ == "__main__":
             # Filter out overly long sequences (> PPO_MAX_TOKENS tokens)
             filtered = []
             removed = []
-            for qt, rt, qi, ri, rw, idx in zip(query_texts, response_texts, query_ids, resp_ids, batch_rewards, batch_indices):
-                if qi.numel() <= PPO_MAX_TOKENS and ri.numel() <= PPO_MAX_TOKENS:
+            # Only iterate over the selected batch items, not all items
+            batch_query_texts = [query_texts[i] for i in batch_indices]
+            batch_response_texts = [response_texts[i] for i in batch_indices]
+            for qt, rt, qi, ri, rw, idx in zip(batch_query_texts, batch_response_texts, query_ids, resp_ids, batch_rewards, batch_indices):
+                query_token_count = qi.numel()
+                resp_token_count = ri.numel()
+                isRemoved=False
+                if query_token_count + resp_token_count <= PPO_MAX_TOKENS:
                     filtered.append((qi, ri, rw, idx))
                 else:
-                    removed.append({"idx": idx, "query_tokens": int(qi.numel()), "resp_tokens": int(ri.numel())})
-                    log_event({"phase": "FILTER", "removed_index": idx, "query_text": qt, "resp_text": rt, "reason": f"> {PPO_MAX_TOKENS} tokens"})
+                    isRemoved=True
+                    removed.append({"idx": idx, "query_tokens": int(query_token_count), "resp_tokens": int(resp_token_count)})
+                log_event({
+                    "phase": "FILTER", 
+                    "query_text": qt,  
+                    "resp_text": rt,    
+                    "actual_query_tokens": int(query_token_count),
+                    "actual_resp_tokens": int(resp_token_count),
+                    "isRemoved": isRemoved
+                })
             if not filtered:
                 return
             query_ids, resp_ids, batch_rewards, batch_indices = zip(*filtered)
@@ -547,8 +563,9 @@ if __name__ == "__main__":
             global ppo_update_count
             ppo_update_count += 1
             if ppo_update_count % PERM_SAVE_INTERVAL == 0:
-                ppo.model.pretrained_model.save_pretrained(PERM_ADAPTER_DIR)
-                log_event({"phase": "PERM_SAVE", "update": ppo_update_count, "path": PERM_ADAPTER_DIR})
+                path=PERM_ADAPTER_DIR+'/'+START_TIME_STR+f'/{ppo_update_count}'
+                ppo.model.pretrained_model.save_pretrained(path)
+                log_event({"phase": "PERM_SAVE", "update": ppo_update_count, "path": path})
 
     # Replace deque with priority heap (C first, then B, then A)
     gen_heap: List[Tuple[int, int, Any]] = []  # (priority, seq, ctx)
@@ -584,9 +601,6 @@ if __name__ == "__main__":
     active_A_contexts: List[PhaseAContext] = []
     new_phase_A()
 
-    processed_generation_batches = 0
-    flush_counter = 0
-
     while True:  # infinite training loop
         if heap_len() < BATCH_GEN_LIMIT:
             new_phase_A()
@@ -598,12 +612,7 @@ if __name__ == "__main__":
             continue
 
         server_generate_batch(batch_contexts, thinking=cfg.thinking)
-        processed_generation_batches += 1
-        flush_counter += 1
-
         for ctx in batch_contexts:
             ctx.handle(enqueue, add_sample, finalize_reward)
 
         maybe_run_ppo()
-        if flush_counter % 100 == 0:
-            maybe_run_ppo(force=True)
