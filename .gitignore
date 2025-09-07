@@ -12,3 +12,4 @@ adapter_config.json
 *.log
 ppo_rollout_log.jsonl
 ppo_lora_adapter/
+asymmetric/logs
