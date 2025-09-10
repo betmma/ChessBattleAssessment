@@ -33,6 +33,8 @@ class FilterGameResult(aenum.Enum):
     _settings_ = aenum.NoAlias
     PASS=0.0
     ERROR=-1.0
+    TIMEOUT=-1.0
+    MOVES_NOT_STRINGIFIABLE=-1.0
     POSSIBLE_STATES_IS_1=-1.0
     NOT_DEFINITE=-1.0
     NO_LEGAL_MOVE_IN_3_MOVES=-0.5
@@ -40,11 +42,21 @@ class FilterGameResult(aenum.Enum):
     POSSIBLE_STATES_LESS_THAN_20=-0.3
 
 from copy import deepcopy
+
 def _filterGame(GameClass: AbstractSystem)->FilterGameResult:
     game1=GameClass()
     legal_moves1=game1.get_legal_moves()
     if len(legal_moves1)==0:
         return FilterGameResult.POSSIBLE_STATES_IS_1
+    for move in legal_moves1: # some uses function that is not stringifiable
+        if type(move)==str:
+            continue # string should pass, while below eval(str(move)) causes error (interpreting as a variable)
+        try:
+            response=eval(str(move))
+        except Exception as e:
+            return FilterGameResult.MOVES_NOT_STRINGIFIABLE
+        if response!=move:
+            return FilterGameResult.MOVES_NOT_STRINGIFIABLE
     g = GameClass()
     g2 = GameClass()
     for i in range(3):
@@ -78,16 +90,38 @@ def _filterGame(GameClass: AbstractSystem)->FilterGameResult:
         return FilterGameResult.POSSIBLE_STATES_LESS_THAN_20
     return FilterGameResult.PASS
 
+# Worker function for multiprocessing timeout handling
+from multiprocessing import Process, Queue
+
+def _filterGame_worker(GameClass, q: Queue):
+    ret = _filterGame(GameClass)
+    q.put(ret.name)
+
 LOG_PATH="logs/gameFilter.log"
-import inspect,traceback
+import os, inspect, traceback
+
+# Ensure log directory exists once
+os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+
 resultCounter={}
 count=0
+
 def filterGame(GameClass: AbstractSystem, gameCode:str)->FilterGameResult:
     global count
     count+=1
     ret=None
     try:
-        ret=_filterGame(GameClass)
+        q = Queue()
+        p = Process(target=_filterGame_worker, args=(GameClass, q))
+        p.start()
+        p.join(5)
+        if p.is_alive():
+            p.terminate()
+            p.join()
+            ret=FilterGameResult.TIMEOUT
+        else:
+            name = q.get_nowait()
+            ret = FilterGameResult[name]
     except Exception as e:
         stack=traceback.format_exc()
         print(f"Error occurred while filtering game {GameClass}:\n{stack}")

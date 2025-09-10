@@ -1,14 +1,8 @@
 # ==== PPO + vLLM SERVER (OpenAI API) one-step pipeline for your A/B/C flow ====
 # Start vLLM server first (example):
+# !!REMEMBER TO SET BELOW ENV VAR
 #   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 #   CUDA_VISIBLE_DEVICES=0,1 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 8 --max-lora-rank 32 --max_model_len 24000 --data-parallel-size 2
-# curl -X POST http://localhost:8000/v1/load_lora_adapter \
-#   -H "Content-Type: application/json" \
-#   -H "Authorization: Bearer token-abc123" \
-#   -d '{
-#     "lora_name": "ppo_adapter",
-#     "lora_path": "ChessBattleAssessment/asymmetric/ppo_lora_adapter"
-#   }'
 
 #
 # Python deps:
@@ -16,6 +10,7 @@
 #   pip install "trl==0.9.6" "transformers>=4.43" "accelerate" "peft" "torch" "openai>=1.35" "requests" "vllm" "bitsandbytes" "aenum"
 #   "vllm<0.10" "transformers<4.54.0"
 #   "deepspeed"
+# export TOKENIZERS_PARALLELISM=true to stop huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks... warning
 # CUDA_VISIBLE_DEVICES=1,3 accelerate launch --config_file zero1.yaml test.py
 #  A) Generate a Game class (Prompt A)
 #  B) Build N_goals goal states via multi-turn proposing (Prompt B)
@@ -27,7 +22,7 @@
 #
 
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 import re
 import copy
@@ -71,7 +66,12 @@ START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
 BASE_MODEL = "/remote-home1/share/models/Qwen3-8B"  # your training policy base
 VLLM_URL = os.getenv("VLLM_URL", "http://localhost:8000")
 VLLM_KEY = os.getenv("VLLM_KEY", "token-abc123")
-ADAPTER_NAME = "ppo_adapter"
+# Versioned LoRA naming (ping-pong without racing in-flight requests)
+# Example names: ppo_adapter_0, ppo_adapter_32, ...
+# Keep a small pool of recent adapters resident to avoid unloading under in-flight requests.
+KEEP_ACTIVE_ADAPTERS = int(os.getenv("KEEP_ACTIVE_ADAPTERS", "8"))  
+CURRENT_ADAPTER_NAME: Optional[str] = None
+_loaded_adapter_names = deque()  # track load order
 
 client = OpenAI(base_url=f"{VLLM_URL}/v1", api_key=VLLM_KEY)
 
@@ -82,13 +82,13 @@ tokenizer.pad_token = tokenizer.eos_token
 SAMPLING_EXTRA = {"top_p": 0.95, "top_k": 20}
 TEMPERATURE = 0.6
 MAX_TOKENS = 16384  # you can raise this, keep server limits in mind
-PPO_MAX_TOKENS = 5500
+PPO_MAX_TOKENS = 4000
 BATCH_GEN_LIMIT = 64  # max contexts per generation batch
 
 @dataclass
 class RunConfig:
-    K_moves: int = 5
-    N_goals: int = 5
+    K_moves: int = 8
+    N_goals: int = 2
     N_tries: int = 5
     thinking: bool = True
 
@@ -106,7 +106,7 @@ ppo_cfg = PPOConfig(
     batch_size=1,
 )
 peft_cfg = LoraConfig(
-    r=32, lora_alpha=64, 
+    r=16, lora_alpha=32, 
     target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",]  # adjust to your model
@@ -167,16 +167,50 @@ def load_lora_adapter(lora_name: str, lora_path: str):
     return _post("/v1/load_lora_adapter", {"lora_name": lora_name, "lora_path": lora_path})
 
 def hot_reload_lora(lora_name: str, lora_path: str):
+    # Kept for compatibility but avoid using this in favor of versioned load below.
     unload_lora_adapter(lora_name)
     return load_lora_adapter(lora_name, lora_path)
 
-def sync_lora_to_disk_for_vllm():
+def _set_current_adapter(name: str):
+    global CURRENT_ADAPTER_NAME
+    CURRENT_ADAPTER_NAME = name
+
+def _maybe_unload_old_adapters():
+    # Keep only the most recent KEEP_ACTIVE_ADAPTERS adapters loaded.
+    while len(_loaded_adapter_names) > KEEP_ACTIVE_ADAPTERS:
+        old = _loaded_adapter_names.popleft()
+        if old != CURRENT_ADAPTER_NAME:
+            try:
+                unload_lora_adapter(old)
+            except Exception:
+                pass
+
+def load_new_adapter_version():
+    """
+    Save current PEFT weights, load them into vLLM under a versioned name based on ppo_update_count,
+    and atomically switch NEW requests to the new name. Old adapters remain loaded briefly.
+    """
     # Save PEFT adapter weights so vLLM can load them
     ppo.model.pretrained_model.save_pretrained(ADAPTER_DIR)
-    hot_reload_lora(ADAPTER_NAME, ADAPTER_DIR)
+    new_name = f"ppo_adapter_{ppo_update_count}"
+    load_lora_adapter(new_name, ADAPTER_DIR)
+    _loaded_adapter_names.append(new_name)
+    _set_current_adapter(new_name)
+    _maybe_unload_old_adapters()
+
+def initial_load_adapter():
+    """
+    Ensure an adapter is present before workers start issuing requests.
+    Uses the current ppo_update_count (typically 0 at startup).
+    """
+    ppo.model.pretrained_model.save_pretrained(ADAPTER_DIR)
+    initial_name = f"ppo_adapter_{ppo_update_count}"
+    load_lora_adapter(initial_name, ADAPTER_DIR)
+    _loaded_adapter_names.append(initial_name)
+    _set_current_adapter(initial_name)
 
 # Ensure adapter is present at startup so first generation does not 404
-sync_lora_to_disk_for_vllm()
+initial_load_adapter()
 
 # ========== Generation via server ==========
 import asyncio, json, httpx
@@ -212,7 +246,8 @@ async def _gen_one(ctx, thinking=True):
 
     try:
         resp = await aclient.completions.create(
-            model=ADAPTER_NAME,
+            # Use the most recently loaded, versioned adapter for NEW requests
+            model=CURRENT_ADAPTER_NAME,
             prompt=prompt,          # <<< single prompt per request
             max_tokens=MAX_TOKENS,
             temperature=TEMPERATURE,
@@ -276,7 +311,7 @@ def extract_game(text: str) -> Optional[str]:
         return code_blocks[-1].strip()
     return text.split('</think>')[-1].strip()
 
-def extract_move(text: str) -> Optional[str]:
+def extract_move(text: str) -> Optional[Any]:
     if '</think>' not in text: # trimmed
         return None
     move = text.split('#### Move chosen')[-1].strip()
@@ -347,23 +382,78 @@ class PhaseAContext:
     game_code: Optional[str] = None
     GameClass: Optional[Any] = None
     reward_idx: Optional[int] = None
-    goal_success_rates: List[Optional[float]] = None
-    b_sample_indices_per_goal: List[List[int]] = None
-    goals_completed: int = 0
+    # direct links to per-goal PhaseBContext (final one will overwrite earlier)
+    children: Dict[int, Any] = None
     last_prompt_text: str = ''
     last_response_text: str = ''
 
+    def maybe_finalize_reward(self, finalize_reward):
+        """
+        Compute Reward-A once all B children have a success_rate.
+        Reward-A = 10 * Var(p_i) across goals.
+        """
+        if not self.children or len(self.children) < self.N_goals:
+            return
+        ps = []
+        for gi in range(self.N_goals):
+            bctx = self.children.get(gi)
+            if bctx is None or bctx.success_rate is None:
+                return  # not ready
+            ps.append(float(bctx.success_rate))
+
+        # All p_i available → finalize Reward-A
+        var_p = float(np.var(np.array(ps, dtype=float), ddof=0))
+        if self.reward_idx is not None:
+            finalize_reward([self.reward_idx], var_p * 10.0, Phase.A)
+
+        # Build log record from B & C children state (no trackers needed)
+        goals_payload = []
+        for gi in range(self.N_goals):
+            bctx = self.children.get(gi)
+            tries_payload = []
+            for c_root in (bctx.children or []):
+                tries_payload.append({
+                    "moves": list(c_root.moves_trace or []),
+                    "final_board": repr(c_root.solver_game.board)
+                })
+            goals_payload.append({
+                "goal_index": gi,
+                "moves": list(bctx.moves_trace or []),
+                "final_board": repr(bctx.proposer_game.board),
+                "reward_B": bctx.reward_B if bctx.reward_B is not None else 0.0,
+                "tries": tries_payload
+            })
+
+        record = {
+            "game_code": self.game_code,
+            "reward_A": var_p * 10.0,
+            "goals": goals_payload
+        }
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/gameComplete.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
     def handle(self, enqueue, add_sample, finalize_reward):
+        if self.children is None:
+            self.children = {}
+
+        # One sample for Phase A (prompt/response pair)
         self.reward_idx = add_sample(self.last_prompt_text, self.last_response_text, None)
+
+        # Extract & compile game
         self.game_code = extract_game(self.last_response_text)
         self.GameClass = run_game_code_and_get_class(self.game_code) if self.game_code else None
         if self.GameClass is None:
-            finalize_reward([self.reward_idx], -1.5,Phase.A)
+            finalize_reward([self.reward_idx], -1.5, Phase.A, 'No valid Game class generated')
             return
-        filterResult=filterGame(self.GameClass,self.game_code)
-        if filterResult!=FilterGameResult.PASS:
-            finalize_reward([self.reward_idx],filterResult.value,Phase.A)
+
+        # Filter sanity checks
+        filterResult = filterGame(self.GameClass, self.game_code)
+        if filterResult != FilterGameResult.PASS:
+            finalize_reward([self.reward_idx], filterResult.value, Phase.A, filterResult.name)
             return
+
+        # Spawn one PhaseB per goal
         for gi in range(self.N_goals):
             proposer_game = self.GameClass()
             first_msg = msg_B(self.game_code, proposer_game, remaining_moves=self.K_moves, first=True)
@@ -373,7 +463,10 @@ class PhaseAContext:
                 proposer_game=proposer_game, moves_left=self.K_moves, goal_index=gi, parent_A=self,
                 b_sample_indices=[], first_turn=True, N_tries=self.N_tries
             )
+            # link initial B (will be overwritten by final B upon completion)
+            self.children[gi] = bctx
             enqueue(bctx)
+
 
 @dataclass
 class PhaseBContext:
@@ -390,23 +483,78 @@ class PhaseBContext:
     N_tries: int
     last_prompt_text: str = ''
     last_response_text: str = ''
+    # track chosen moves for this goal while proposing
+    moves_trace: List[Any] = None
+    # direct links to PhaseCContext roots (one per try)
+    children: List[Any] = None
+
+    # computed outcomes
+    success_rate: Optional[float] = None
+    reward_B: Optional[float] = None
+    
+    def _finalize_B(self, p: float, finalize_reward, note: Optional[str] = None):
+        """Idempotently set success_rate and Reward-B, then finalize."""
+        if self.success_rate is None:
+            self.success_rate = float(p)
+        # compute once
+        if self.reward_B is None:
+            r_b = max(0.0, 1.0 - self.success_rate)  # single definition of Reward-B
+            if self.success_rate == 0.0:
+                r_b = 0.0
+            self.reward_B = r_b
+            if self.b_sample_indices:
+                note = note or f"p={self.success_rate:.3f}"
+                finalize_reward(self.b_sample_indices, r_b, Phase.B, note=note)
+        # ask parent A to try finalizing Reward-A
+        self.parent_A.maybe_finalize_reward(finalize_reward)
+
+    def maybe_finalize_reward(self, finalize_reward):
+        """
+        If all C tries (children) have completed, compute p = successes / tries,
+        finalize Reward-B for all B samples, and then ask A to maybe finalize.
+        """
+        # If p already known (e.g., short-circuit case), ensure reward persisted:
+        if self.success_rate is not None:
+            self._finalize_B(self.success_rate, finalize_reward)
+            return
+
+        # Otherwise wait for all C tries
+        if not self.children or len(self.children) < self.N_tries:
+            return
+        if any(not getattr(c, "is_complete", False) for c in self.children):
+            return
+
+        successes = sum(1 for c in self.children if bool(c.success))
+        tries = len(self.children)
+        p = successes / float(tries) if tries > 0 else 0.0
+        self._finalize_B(p, finalize_reward)
 
     def handle(self, enqueue, add_sample, finalize_reward):
+        if self.moves_trace is None:
+            self.moves_trace = []
+        if self.children is None:
+            self.children = []
+
+        # Log B turn sample
         idx = add_sample(self.last_prompt_text, self.last_response_text, None)
         self.b_sample_indices.append(idx)
-        self.parent_A.b_sample_indices_per_goal[self.goal_index].append(idx)
+
+        # Choose & validate move
         chosen = extract_move(self.last_response_text)
-        # print(f'[Goal {self.goal_index+1}/{self.parent_A.N_goals} | Moves left {self.moves_left}] Chosen move: {chosen}')
-        if chosen is None:
-            return
         legal = self.proposer_game.get_legal_moves()
-        # print(f'legal moves: {legal}')
-        if chosen != 'DONE':
-            if str(chosen) not in legal and chosen not in legal:
-                chosen = 'DONE'
-        if chosen != 'DONE':
+        is_valid = chosen == 'DONE' or (chosen is not None and (chosen in legal or str(chosen) in legal))
+
+        if not is_valid:
+            # terminate this goal construction attempt to avoid infinite loops
+            chosen = 'DONE'
+
+        if chosen is not None and chosen != 'DONE':
+            # record and execute the valid move
+            self.moves_trace.append(chosen)
             self.proposer_game.execute_move(chosen)
             self.moves_left -= 1
+
+        # Continue proposing if moves remain and not DONE
         if self.moves_left > 0 and chosen != 'DONE':
             new_messages = self.messages + [
                 {"role": "assistant", "content": remove_think(self.last_response_text)},
@@ -415,23 +563,35 @@ class PhaseBContext:
             enqueue(PhaseBContext(
                 phase='B', messages=new_messages, thinking=self.thinking, GameClass=self.GameClass,
                 proposer_game=self.proposer_game, moves_left=self.moves_left, goal_index=self.goal_index,
-                parent_A=self.parent_A, b_sample_indices=self.b_sample_indices, first_turn=False, N_tries=self.N_tries
+                parent_A=self.parent_A, b_sample_indices=self.b_sample_indices, first_turn=False, N_tries=self.N_tries,
+                moves_trace=self.moves_trace, children=self.children
             ))
-        elif self.first_turn: # if first_turn and DONE, the state is initial state
-            pass
-            # print(f'Warning: Goal {self.goal_index+1} proposer finished immediately with DONE on first turn. Raw text:\n{self.last_response_text[-200:]}')
-        else:
-            goal_board = copy.deepcopy(self.proposer_game.board)
-            successes_ref = {"count": 0, "tries": 0}
-            for _ in range(self.N_tries):
-                solver_game = self.GameClass()
-                c_first_msg = msg_C(self.parent_A.game_code, solver_game, goal_board, remaining_moves=self.parent_A.K_moves, first=True)
-                messages = [{"role": "system", "content": "You are a helpful assistant."}, c_first_msg]
-                enqueue(PhaseCContext(
-                    phase='C', messages=messages, thinking=self.thinking, GameClass=self.GameClass,
-                    solver_game=solver_game, goal_board=goal_board, moves_left=self.parent_A.K_moves,
-                    goal_index=self.goal_index, parent_A=self.parent_A, try_sample_indices=[], successes_ref=successes_ref
-                ))
+            return
+
+        # Terminal conditions
+        if self.first_turn and (chosen == 'DONE' or self.moves_left == self.parent_A.K_moves):
+            # C always solves in this trivial case -> p = 1.0, Reward-B = 0
+            self._finalize_B(1.0, finalize_reward, note="p=1.000 (DONE on first turn)")
+            self.parent_A.children[self.goal_index] = self
+            return
+
+        # Otherwise, finalize this goal state and spawn C tries
+        self.parent_A.children[self.goal_index] = self
+        goal_board = copy.deepcopy(self.proposer_game.board)
+        for _ in range(self.N_tries):
+            solver_game = self.GameClass()
+            c_first_msg = msg_C(self.parent_A.game_code, solver_game, goal_board,
+                                remaining_moves=self.parent_A.K_moves, first=True)
+            messages = [{"role": "system", "content": "You are a helpful assistant."}, c_first_msg]
+            cctx = PhaseCContext(
+                phase='C', messages=messages, thinking=self.thinking, GameClass=self.GameClass,
+                solver_game=solver_game, goal_board=goal_board, moves_left=self.parent_A.K_moves,
+                goal_index=self.goal_index, parent_A=self.parent_A, parent_B=self,
+                try_sample_indices=[]
+            )
+            self.children.append(cctx)
+            enqueue(cctx)
+
 
 @dataclass
 class PhaseCContext:
@@ -444,49 +604,62 @@ class PhaseCContext:
     moves_left: int
     goal_index: int
     parent_A: PhaseAContext
+    parent_B: PhaseBContext
     try_sample_indices: List[int]
-    successes_ref: Dict[str, int]
     last_prompt_text: str = ''
     last_response_text: str = ''
+    # track chosen moves for this solver try
+    moves_trace: List[Any] = None
+
+    # computed outcome for this try
+    success: Optional[bool] = None
+    is_complete: bool = False
 
     def handle(self, enqueue, add_sample, finalize_reward):
+        if self.moves_trace is None:
+            self.moves_trace = []
+
+        # Record this C step
         sample_idx = add_sample(self.last_prompt_text, self.last_response_text, None)
         self.try_sample_indices.append(sample_idx)
+
+        # Extract and validate move
         chosen = extract_move(self.last_response_text)
-        if chosen is None:
-            return
         legal = self.solver_game.get_legal_moves()
-        if (chosen is None) or (chosen not in legal and str(chosen) not in legal):
-            chosen = None
-        if chosen is not None:
+        valid = (chosen is not None) and (chosen in legal or str(chosen) in legal)
+
+        if valid:
+            self.moves_trace.append(chosen)
             self.solver_game.execute_move(chosen)
-        self.moves_left -= 1
+            self.moves_left -= 1
+        else:
+            # invalid move or no move: end this try
+            self.moves_left = 0
+
+        # Keep solving if moves remain and goal not yet matched
         if self.moves_left > 0 and self.solver_game.board != self.goal_board:
             new_messages = self.messages + [
                 {"role": "assistant", "content": remove_think(self.last_response_text)},
-                msg_C(self.parent_A.game_code, self.solver_game, self.goal_board, remaining_moves=self.moves_left, first=False)
+                msg_C(self.parent_A.game_code, self.solver_game, self.goal_board,
+                      remaining_moves=self.moves_left, first=False)
             ]
             enqueue(PhaseCContext(
                 phase='C', messages=new_messages, thinking=self.thinking, GameClass=self.GameClass,
                 solver_game=self.solver_game, goal_board=self.goal_board, moves_left=self.moves_left,
-                goal_index=self.goal_index, parent_A=self.parent_A, try_sample_indices=self.try_sample_indices,
-                successes_ref=self.successes_ref
+                goal_index=self.goal_index, parent_A=self.parent_A, parent_B=self.parent_B,
+                try_sample_indices=self.try_sample_indices, moves_trace=self.moves_trace
             ))
-        else:
-            success = (self.solver_game.board == self.goal_board)
-            if success:
-                self.successes_ref["count"] += 1
-            self.successes_ref["tries"] += 1
-            r_try = 1.0 if success else 0.0
+            return
+
+        # Try completed; compute Reward-C for this try
+        self.success = (self.solver_game.board == self.goal_board)
+        self.is_complete = True
+        r_try = 1.0 if self.success else 0.0
+        if self.try_sample_indices:
             finalize_reward(self.try_sample_indices, r_try, Phase.C)
-            if self.successes_ref["tries"] == self.parent_A.N_tries:
-                p = self.successes_ref["count"] / float(self.parent_A.N_tries)
-                self.parent_A.goal_success_rates[self.goal_index] = p
-                r_b = (1.0 - p) if p > 0.0 else 0.0
-                finalize_reward(self.parent_A.b_sample_indices_per_goal[self.goal_index], r_b, Phase.B)
-                if all(g is not None for g in self.parent_A.goal_success_rates):
-                    var_p = float(np.var(np.array(self.parent_A.goal_success_rates), ddof=0))
-                    finalize_reward([self.parent_A.reward_idx], var_p*10, Phase.A)
+
+        # Let Phase B see if all tries are done so it can compute Reward-B
+        self.parent_B.maybe_finalize_reward(finalize_reward)
 
 # ----------------------------
 # Queue-based infinite PPO loop (removed one_ppo_step)
@@ -513,13 +686,13 @@ def add_sample(prompt_text: str, response_text: str, reward_value: Optional[floa
         log_event({"prompt_text": prompt_text, "response_text": response_text, "reward": float(t.item())})
     return idx
 
-def finalize_reward(idx_list: List[int], value: float, phase: Phase):
+def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optional[str]=''):
     t = torch.tensor(float(value), device=ppo.accelerator.device)
     for idx in idx_list:
         if rewards[idx] is None:
             rewards[idx] = t
             unsent_indices.append(idx)
-            log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(value)})
+            log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(value), "note": note})
 
 def maybe_run_ppo():
     while len(unsent_indices) >= ppo.config.batch_size:
@@ -564,9 +737,10 @@ def maybe_run_ppo():
         # Permanent save every PERM_SAVE_INTERVAL updates
         global ppo_update_count
         ppo_update_count += 1
-        if ppo_update_count%32==0: # load on every query will exceed max-loras and error
-            ppo.model.pretrained_model.save_pretrained(ADAPTER_DIR)
-            hot_reload_lora(ADAPTER_NAME, ADAPTER_DIR)
+        if ppo_update_count % 32 == 0:
+            # Load a NEW versioned adapter and switch new requests to it.
+            # Older adapters remain temporarily loaded to avoid races.
+            load_new_adapter_version()
         if ppo_update_count % PERM_SAVE_INTERVAL == 0:
             path=PERM_ADAPTER_DIR+'/'+START_TIME_STR+f'/{ppo_update_count}'
             ppo.model.pretrained_model.save_pretrained(path)
@@ -598,8 +772,6 @@ async def run_workers_and_feed(cfg):
             N_goals=cfg.N_goals,
             N_tries=cfg.N_tries,
             thinking=cfg.thinking,
-            goal_success_rates=[None]*cfg.N_goals,
-            b_sample_indices_per_goal=[[] for _ in range(cfg.N_goals)],
         )
         active_As.append(a)
         await enqueue(a)
@@ -608,7 +780,7 @@ async def run_workers_and_feed(cfg):
     async def feeder():
         while True:
             # If low backlog, add more A to spawn B/C work later
-            if pq.qsize() < max(BATCH_GEN_LIMIT * 2, BATCH_GEN_LIMIT // 2):
+            if pq.qsize() < BATCH_GEN_LIMIT // 4:
                 await new_phase_A()
             await asyncio.sleep(0.005)
 
