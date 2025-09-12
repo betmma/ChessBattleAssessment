@@ -2,7 +2,7 @@
 # Start vLLM server first (example):
 # !!REMEMBER TO SET BELOW ENV VAR
 #   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
-#   CUDA_VISIBLE_DEVICES=0,1 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 8 --max-lora-rank 32 --max_model_len 24000 --data-parallel-size 2
+#   CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 8 --max-lora-rank 32 --max_model_len 32000 --data-parallel-size 3
 
 #
 # Python deps:
@@ -56,7 +56,7 @@ from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 import bitsandbytes as bnb
 from peft import LoraConfig
 
-from gameFilter import filterGame, FilterGameResult
+from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
@@ -81,15 +81,15 @@ tokenizer.pad_token = tokenizer.eos_token
 # vLLM sampling params equivalent
 SAMPLING_EXTRA = {"top_p": 0.95, "top_k": 20}
 TEMPERATURE = 0.6
-MAX_TOKENS = 16384  # you can raise this, keep server limits in mind
+MAX_TOKENS = 24000  # you can raise this, keep server limits in mind
 PPO_MAX_TOKENS = 4000
 BATCH_GEN_LIMIT = 64  # max contexts per generation batch
 
 @dataclass
 class RunConfig:
     K_moves: int = 8
-    N_goals: int = 2
-    N_tries: int = 5
+    N_goals: int = 10
+    N_tries: int = 10
     thinking: bool = True
 
 class Phase(enum.Enum):
@@ -134,7 +134,7 @@ ADAPTER_DIR = tempfile.mkdtemp(prefix="ppo_lora_")
 # Permanent adapter directory (saved less frequently)
 PERM_ADAPTER_DIR = os.path.join(os.path.dirname(__file__), "ppo_lora_adapter")
 os.makedirs(PERM_ADAPTER_DIR, exist_ok=True)
-PERM_SAVE_INTERVAL = int(os.getenv("PERM_SAVE_INTERVAL", "50"))  # every N PPO updates
+PERM_SAVE_INTERVAL = int(os.getenv("PERM_SAVE_INTERVAL", "100"))  # every N PPO updates
 ppo_update_count = 0  # counts successful PPO updates
 
 LOG_FILE = "logs/ppo_rollout_log.jsonl"
@@ -164,7 +164,12 @@ def unload_lora_adapter(lora_name: str):
         return {"status": "unloaded_or_missing"}
 
 def load_lora_adapter(lora_name: str, lora_path: str):
-    return _post("/v1/load_lora_adapter", {"lora_name": lora_name, "lora_path": lora_path})
+    try:
+        return _post("/v1/load_lora_adapter", {"lora_name": lora_name, "lora_path": lora_path})
+    except RuntimeError as e:
+        if 'has already been loaded' in str(e): # happens when old run loaded an adapter, and new run begins without restarting vllm server
+            unload_lora_adapter(lora_name)
+            return load_lora_adapter(lora_name, lora_path)
 
 def hot_reload_lora(lora_name: str, lora_path: str):
     # Kept for compatibility but avoid using this in favor of versioned load below.
@@ -305,11 +310,6 @@ PROMPT_C_CONT_TMPL = """Remaining moves you may still play: {remaining_moves}\nL
 # ----------------------------
 # Helpers for multi-turn games
 # ----------------------------
-def extract_game(text: str) -> Optional[str]:
-    code_blocks= re.findall(r"```(?:python)?\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
-    if code_blocks:
-        return code_blocks[-1].strip()
-    return text.split('</think>')[-1].strip()
 
 def extract_move(text: str) -> Optional[Any]:
     if '</think>' not in text: # trimmed
@@ -325,24 +325,6 @@ def remove_think(text: str) -> str:
     '''remove thinking part for constructing multi turn chat'''
     return text.split('</think>')[-1].strip()
 
-def run_game_code_and_get_class(game_src: str):
-    """
-    Exec the generated Game class in a minimal namespace that already defines AbstractSystem.
-    Returns Game class object. If not found or doesn't pass check, return None
-    """
-    namespace = {}
-    exec(BOARD_GAME_CODE, namespace, namespace)
-    try:
-        exec(game_src, namespace, namespace)
-    except Exception as e:
-        print(f'Error executing game code: {e}')
-        return None
-    Game = namespace.get("System", None)
-    if Game is None:
-        print("Generated code did not define class System.")
-        return None
-    return Game
-
 def messages_for_prompt_A(MOVES: int):
     sys = {"role": "system", "content": "You are a helpful assistant."}
     user = {"role": "user", "content": PROMPT_A_TMPL.format(BOARD_GAME_CODE=BOARD_GAME_CODE)}
@@ -350,6 +332,8 @@ def messages_for_prompt_A(MOVES: int):
 
 def msg_B(game_code: str, game_obj, remaining_moves: int, first: bool):
     legal = game_obj.get_legal_moves()
+    if len(legal)>50:
+        legal=legal[:40]+['... (omitted. deduct them by yourself) ...']+legal[-10:]
     board_str = repr(game_obj.board)
     if first:
         txt = PROMPT_B_FIRST_TMPL.format(GAME_CODE=game_code, remaining_moves=remaining_moves, legal=legal, board=board_str)
@@ -359,6 +343,8 @@ def msg_B(game_code: str, game_obj, remaining_moves: int, first: bool):
 
 def msg_C(game_code: str, game_obj, goal_board, remaining_moves: int, first: bool):
     legal = game_obj.get_legal_moves()
+    if len(legal)>50:
+        legal=legal[:40]+['... (omitted. deduct them by yourself) ...']+legal[-10:]
     board_str = repr(game_obj.board)
     goal_str = repr(goal_board)
     if first:
@@ -382,8 +368,8 @@ class PhaseAContext:
     game_code: Optional[str] = None
     GameClass: Optional[Any] = None
     reward_idx: Optional[int] = None
-    # direct links to per-goal PhaseBContext (final one will overwrite earlier)
-    children: Dict[int, Any] = None
+    # direct links to per-goal PhaseBContext (next one will overwrite earlier)
+    children: List['PhaseBContext'] = None
     last_prompt_text: str = ''
     last_response_text: str = ''
 
@@ -396,7 +382,7 @@ class PhaseAContext:
             return
         ps = []
         for gi in range(self.N_goals):
-            bctx = self.children.get(gi)
+            bctx = self.children[gi]
             if bctx is None or bctx.success_rate is None:
                 return  # not ready
             ps.append(float(bctx.success_rate))
@@ -409,12 +395,12 @@ class PhaseAContext:
         # Build log record from B & C children state (no trackers needed)
         goals_payload = []
         for gi in range(self.N_goals):
-            bctx = self.children.get(gi)
+            bctx = self.children[gi]
             tries_payload = []
-            for c_root in (bctx.children or []):
+            for cctx in (bctx.children or []):
                 tries_payload.append({
-                    "moves": list(c_root.moves_trace or []),
-                    "final_board": repr(c_root.solver_game.board)
+                    "moves": list(cctx.moves_trace or []),
+                    "final_board": repr(cctx.solver_game.board)
                 })
             goals_payload.append({
                 "goal_index": gi,
@@ -435,23 +421,20 @@ class PhaseAContext:
 
     def handle(self, enqueue, add_sample, finalize_reward):
         if self.children is None:
-            self.children = {}
+            self.children = []
 
         # One sample for Phase A (prompt/response pair)
         self.reward_idx = add_sample(self.last_prompt_text, self.last_response_text, None)
+        
+        # Filter sanity checks
+        filterResult = filterGame(self.last_response_text)
+        if filterResult != FilterGameResult.PASS:
+            finalize_reward([self.reward_idx], filterResult.value, Phase.A, filterResult.name)
+            return
 
         # Extract & compile game
         self.game_code = extract_game(self.last_response_text)
         self.GameClass = run_game_code_and_get_class(self.game_code) if self.game_code else None
-        if self.GameClass is None:
-            finalize_reward([self.reward_idx], -1.5, Phase.A, 'No valid Game class generated')
-            return
-
-        # Filter sanity checks
-        filterResult = filterGame(self.GameClass, self.game_code)
-        if filterResult != FilterGameResult.PASS:
-            finalize_reward([self.reward_idx], filterResult.value, Phase.A, filterResult.name)
-            return
 
         # Spawn one PhaseB per goal
         for gi in range(self.N_goals):
@@ -464,7 +447,7 @@ class PhaseAContext:
                 b_sample_indices=[], first_turn=True, N_tries=self.N_tries
             )
             # link initial B (will be overwritten by final B upon completion)
-            self.children[gi] = bctx
+            self.children.append(bctx)
             enqueue(bctx)
 
 
@@ -486,7 +469,7 @@ class PhaseBContext:
     # track chosen moves for this goal while proposing
     moves_trace: List[Any] = None
     # direct links to PhaseCContext roots (one per try)
-    children: List[Any] = None
+    children: List['PhaseCContext'] = None
 
     # computed outcomes
     success_rate: Optional[float] = None
@@ -534,6 +517,8 @@ class PhaseBContext:
             self.moves_trace = []
         if self.children is None:
             self.children = []
+        # Link self to parent A (overwrites earlier if multi-turn)
+        self.parent_A.children[self.goal_index] = self
 
         # Log B turn sample
         idx = add_sample(self.last_prompt_text, self.last_response_text, None)
@@ -572,13 +557,11 @@ class PhaseBContext:
         if self.first_turn and (chosen == 'DONE' or self.moves_left == self.parent_A.K_moves):
             # C always solves in this trivial case -> p = 1.0, Reward-B = 0
             self._finalize_B(1.0, finalize_reward, note="p=1.000 (DONE on first turn)")
-            self.parent_A.children[self.goal_index] = self
             return
 
         # Otherwise, finalize this goal state and spawn C tries
-        self.parent_A.children[self.goal_index] = self
         goal_board = copy.deepcopy(self.proposer_game.board)
-        for _ in range(self.N_tries):
+        for ti in range(self.N_tries):
             solver_game = self.GameClass()
             c_first_msg = msg_C(self.parent_A.game_code, solver_game, goal_board,
                                 remaining_moves=self.parent_A.K_moves, first=True)
@@ -586,7 +569,7 @@ class PhaseBContext:
             cctx = PhaseCContext(
                 phase='C', messages=messages, thinking=self.thinking, GameClass=self.GameClass,
                 solver_game=solver_game, goal_board=goal_board, moves_left=self.parent_A.K_moves,
-                goal_index=self.goal_index, parent_A=self.parent_A, parent_B=self,
+                goal_index=self.goal_index, try_index=ti, parent_A=self.parent_A, parent_B=self,
                 try_sample_indices=[]
             )
             self.children.append(cctx)
@@ -603,6 +586,7 @@ class PhaseCContext:
     goal_board: Any
     moves_left: int
     goal_index: int
+    try_index: int
     parent_A: PhaseAContext
     parent_B: PhaseBContext
     try_sample_indices: List[int]
@@ -618,6 +602,8 @@ class PhaseCContext:
     def handle(self, enqueue, add_sample, finalize_reward):
         if self.moves_trace is None:
             self.moves_trace = []
+            
+        self.parent_B.children[self.try_index] = self
 
         # Record this C step
         sample_idx = add_sample(self.last_prompt_text, self.last_response_text, None)
@@ -646,7 +632,7 @@ class PhaseCContext:
             enqueue(PhaseCContext(
                 phase='C', messages=new_messages, thinking=self.thinking, GameClass=self.GameClass,
                 solver_game=self.solver_game, goal_board=self.goal_board, moves_left=self.moves_left,
-                goal_index=self.goal_index, parent_A=self.parent_A, parent_B=self.parent_B,
+                goal_index=self.goal_index, try_index=self.try_index, parent_A=self.parent_A, parent_B=self.parent_B,
                 try_sample_indices=self.try_sample_indices, moves_trace=self.moves_trace
             ))
             return
