@@ -11,7 +11,7 @@
 #   "vllm<0.10" "transformers<4.54.0"
 #   "deepspeed"
 # export TOKENIZERS_PARALLELISM=true to stop huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks... warning
-# CUDA_VISIBLE_DEVICES=1,3 accelerate launch --config_file zero1.yaml test.py
+# CUDA_VISIBLE_DEVICES=3 accelerate launch --config_file zero1.yaml test.py
 #  A) Generate a Game class (Prompt A)
 #  B) Build N_goals goal states via multi-turn proposing (Prompt B)
 #  C) For each goal, run N_tries solver attempts (Prompt C)
@@ -22,7 +22,7 @@
 #
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 import re
 import copy
@@ -58,18 +58,33 @@ from peft import LoraConfig
 
 from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
+from settings import (
+    BASE_MODEL,
+    VLLM_URL,
+    VLLM_KEY,
+    KEEP_ACTIVE_ADAPTERS,
+    BATCH_GEN_LIMIT,
+    MAX_TOKENS,
+    PROMPT_MAX_TOKENS,
+    PPO_MAX_TOKENS,
+    TEMPERATURE,
+    SAMPLING_EXTRA,
+    PERM_SAVE_INTERVAL,
+    LOG_FILE,
+    GAME_COMPLETE_LOG,
+    GENERATION_LOG,
+    K_MOVES,
+    N_GOALS,
+    N_TRIES,
+    THINKING,
+    EVAL_PERIOD,
+    EVAL_RESULTS_FILE
+)
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
 # ----------------------------
-# Config: server + model
+# Config: server + model (use settings directly)
 # ----------------------------
-BASE_MODEL = "/remote-home1/share/models/Qwen3-8B"  # your training policy base
-VLLM_URL = os.getenv("VLLM_URL", "http://localhost:8000")
-VLLM_KEY = os.getenv("VLLM_KEY", "token-abc123")
-# Versioned LoRA naming (ping-pong without racing in-flight requests)
-# Example names: ppo_adapter_0, ppo_adapter_32, ...
-# Keep a small pool of recent adapters resident to avoid unloading under in-flight requests.
-KEEP_ACTIVE_ADAPTERS = int(os.getenv("KEEP_ACTIVE_ADAPTERS", "8"))  
 CURRENT_ADAPTER_NAME: Optional[str] = None
 _loaded_adapter_names = deque()  # track load order
 
@@ -78,24 +93,11 @@ client = OpenAI(base_url=f"{VLLM_URL}/v1", api_key=VLLM_KEY)
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
 tokenizer.pad_token = tokenizer.eos_token
 
-# vLLM sampling params equivalent
-SAMPLING_EXTRA = {"top_p": 0.95, "top_k": 20}
-TEMPERATURE = 0.6
-MAX_TOKENS = 24000  # you can raise this, keep server limits in mind
-PPO_MAX_TOKENS = 4000
-BATCH_GEN_LIMIT = 64  # max contexts per generation batch
-
-@dataclass
-class RunConfig:
-    K_moves: int = 8
-    N_goals: int = 10
-    N_tries: int = 10
-    thinking: bool = True
-
 class Phase(enum.Enum):
     A = 'A'
     B = 'B'
     C = 'C'
+    EVAL = 'EVAL'
 # --------------------------------------
 # PPO policy/value model with PEFT LoRA
 # --------------------------------------
@@ -119,7 +121,8 @@ policy = AutoModelForCausalLMWithValueHead.from_pretrained(
 )
 # reduce activation memory
 policy.pretrained_model.config.use_cache = False  # must be off for checkpointing
-policy.pretrained_model.gradient_checkpointing_enable()
+policy.pretrained_model.gradient_checkpointing_enable(
+    gradient_checkpointing_kwargs={"use_reentrant": False})
 
 # (Optional, if your stack supports it) use FlashAttention 2
 try:
@@ -134,14 +137,13 @@ ADAPTER_DIR = tempfile.mkdtemp(prefix="ppo_lora_")
 # Permanent adapter directory (saved less frequently)
 PERM_ADAPTER_DIR = os.path.join(os.path.dirname(__file__), "ppo_lora_adapter")
 os.makedirs(PERM_ADAPTER_DIR, exist_ok=True)
-PERM_SAVE_INTERVAL = int(os.getenv("PERM_SAVE_INTERVAL", "100"))  # every N PPO updates
+
 ppo_update_count = 0  # counts successful PPO updates
 
-LOG_FILE = "logs/ppo_rollout_log.jsonl"
-
+# remove settings usage in log_event
 def log_event(event: dict):
-    """Append a JSON event with timestamp to log file."""
     event_with_time = {"ts": time.time(), "time":datetime.datetime.now().strftime('%Y%m%d-%H%M%S'),**event}
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(event_with_time, ensure_ascii=False) + "\n")
 # ========== vLLM server LoRA management ==========
@@ -154,7 +156,7 @@ def _post(path: str, payload: dict):
     )
     if not r.ok:
         raise RuntimeError(f"POST {path} failed {r.status_code}: {r.text}")
-    return r.json() if r.headers.get("content-type","").startswith("application/json") else r.text
+    return r.json() if r.headers.get("content-type","" ).startswith("application/json") else r.text
 
 def unload_lora_adapter(lora_name: str):
     try:
@@ -170,11 +172,6 @@ def load_lora_adapter(lora_name: str, lora_path: str):
         if 'has already been loaded' in str(e): # happens when old run loaded an adapter, and new run begins without restarting vllm server
             unload_lora_adapter(lora_name)
             return load_lora_adapter(lora_name, lora_path)
-
-def hot_reload_lora(lora_name: str, lora_path: str):
-    # Kept for compatibility but avoid using this in favor of versioned load below.
-    unload_lora_adapter(lora_name)
-    return load_lora_adapter(lora_name, lora_path)
 
 def _set_current_adapter(name: str):
     global CURRENT_ADAPTER_NAME
@@ -245,15 +242,14 @@ async def _gen_one(ctx, thinking=True):
     ctx.last_prompt_text = prompt
 
     # quick length guard
-    if len(tokenizer(prompt, add_special_tokens=False).input_ids) > 7500:
+    if len(tokenizer(prompt, add_special_tokens=False).input_ids) > PROMPT_MAX_TOKENS:
         ctx.last_response_text = "[Error in generation]"
         return ctx
 
     try:
         resp = await aclient.completions.create(
-            # Use the most recently loaded, versioned adapter for NEW requests
             model=CURRENT_ADAPTER_NAME,
-            prompt=prompt,          # <<< single prompt per request
+            prompt=prompt,
             max_tokens=MAX_TOKENS,
             temperature=TEMPERATURE,
             extra_body=SAMPLING_EXTRA,
@@ -416,7 +412,7 @@ class PhaseAContext:
             "goals": goals_payload
         }
         os.makedirs("logs", exist_ok=True)
-        with open("logs/gameComplete.log", "a", encoding="utf-8") as f:
+        with open(GAME_COMPLETE_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def handle(self, enqueue, add_sample, finalize_reward):
@@ -648,10 +644,84 @@ class PhaseCContext:
         self.parent_B.maybe_finalize_reward(finalize_reward)
 
 # ----------------------------
+# Evaluation Context (highest priority)
+# ----------------------------
+@dataclass
+class EvalContext:
+    phase: str  # 'EVAL'
+    messages: List[Dict]
+    thinking: bool
+    eval_index: int
+    sample_index: int
+    game_code: str
+    sequence: List[Any]
+    final_board: Any
+    GameClass: Any
+    moves_left: int
+    solver_game: Any
+    model_moves: List[Any] = None
+    last_prompt_text: str = ''
+    last_response_text: str = ''
+    is_complete: bool = False
+
+    def handle(self, enqueue, add_sample, finalize_reward):
+        global EVAL_RUNS
+        if self.model_moves is None:
+            self.model_moves = []
+        add_sample(self.last_prompt_text, self.last_response_text, None)
+        chosen = extract_move(self.last_response_text)
+        legal = self.solver_game.get_legal_moves()
+        valid = (chosen is not None) and (chosen in legal or str(chosen) in legal)
+        if valid and self.moves_left > 0:
+            self.model_moves.append(chosen)
+            self.solver_game.execute_move(chosen)
+            self.moves_left -= 1
+        else:
+            self.moves_left = 0
+        if self.moves_left > 0 and self.solver_game.board != self.final_board:
+            new_messages = self.messages + [
+                {"role": "assistant", "content": remove_think(self.last_response_text)},
+                msg_C(self.game_code, self.solver_game, self.final_board, remaining_moves=self.moves_left, first=False)
+            ]
+            enqueue(EvalContext(
+                phase='EVAL', messages=new_messages, thinking=self.thinking, eval_index=self.eval_index,
+                sample_index=self.sample_index, game_code=self.game_code, sequence=self.sequence,
+                final_board=self.final_board, GameClass=self.GameClass, moves_left=self.moves_left,
+                solver_game=self.solver_game, model_moves=self.model_moves
+            ))
+            return
+        success = (self.solver_game.board == self.final_board)
+        run = EVAL_RUNS[self.eval_index]
+        run['results'][self.sample_index] = {
+            'sample_index': self.sample_index,
+            'game': self.game_code,
+            'sequence': self.sequence,
+            'final_board': self.final_board,
+            'model_moves': self.model_moves,
+            'model_final_board': self.solver_game.board,
+            'success': success
+        }
+        if all(r is not None for r in run['results']):
+            samples = run['results']
+            overall_acc = float(sum(1 for r in samples if r['success']) / len(samples)) if samples else 0.0
+            per_game_counts = {}
+            per_game_success = {}
+            for r in samples:
+                g = r['game']
+                per_game_counts[g] = per_game_counts.get(g, 0) + 1
+                if r['success']:
+                    per_game_success[g] = per_game_success.get(g, 0) + 1
+            per_game_acc = {g: per_game_success.get(g, 0)/c for g, c in per_game_counts.items()}
+            run['summary'] = {'overall_acc': overall_acc, 'per_game_acc': per_game_acc}
+            os.makedirs(os.path.dirname(EVAL_RESULTS_FILE), exist_ok=True)
+            with open(EVAL_RESULTS_FILE, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(run, ensure_ascii=False) + '\n')
+            log_event({'phase': 'EVAL', 'eval_index': self.eval_index, 'summary': run['summary']})
+        self.is_complete = True
+
+# ----------------------------
 # Queue-based infinite PPO loop (removed one_ppo_step)
 # ----------------------------
-
-cfg = RunConfig()
 
 # Containers for samples (text + rewards) kept around; could be truncated periodically
 query_texts: List[str] = []
@@ -672,7 +742,7 @@ def add_sample(prompt_text: str, response_text: str, reward_value: Optional[floa
         log_event({"prompt_text": prompt_text, "response_text": response_text, "reward": float(t.item())})
     return idx
 
-def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optional[str]=''):
+def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optional[str] = ''):
     t = torch.tensor(float(value), device=ppo.accelerator.device)
     for idx in idx_list:
         if rewards[idx] is None:
@@ -713,6 +783,7 @@ def maybe_run_ppo():
                 "resp_text": rt,    
                 "actual_query_tokens": int(query_token_count),
                 "actual_resp_tokens": int(resp_token_count),
+                'sum_tokens': int(query_token_count + resp_token_count),
                 "isRemoved": isRemoved
             })
         if not filtered:
@@ -720,7 +791,7 @@ def maybe_run_ppo():
         query_ids, resp_ids, batch_rewards, batch_indices = zip(*filtered)
         stats = ppo.step(list(query_ids), list(resp_ids), list(batch_rewards))
         log_event({"phase": "PPO", "stats": {k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in stats.items()}, "num_samples": len(filtered)})
-        # Permanent save every PERM_SAVE_INTERVAL updates
+        # Permanent save every settings.perm_save_interval updates
         global ppo_update_count
         ppo_update_count += 1
         if ppo_update_count % 32 == 0:
@@ -731,11 +802,59 @@ def maybe_run_ppo():
             path=PERM_ADAPTER_DIR+'/'+START_TIME_STR+f'/{ppo_update_count}'
             ppo.model.pretrained_model.save_pretrained(path)
             log_event({"phase": "PERM_SAVE", "update": ppo_update_count, "path": path})
+            # trigger evaluation if period reached
+            if (ppo_update_count % (PERM_SAVE_INTERVAL * EVAL_PERIOD) == 0):
+                    trigger_evaluation()
+
+
+def trigger_evaluation():
+    samples = load_test_samples()
+    if not samples:
+        print("No evaluation samples found.")
+        return
+    global CURRENT_EVAL_INDEX, EVAL_RUNS
+    CURRENT_EVAL_INDEX += 1
+    results_placeholder = [None]*len(samples)
+    EVAL_RUNS.append({'index': CURRENT_EVAL_INDEX, 'summary': {}, 'results': results_placeholder})
+    # enqueue eval contexts
+    for si, s in enumerate(samples):
+        GameClass = run_game_code_and_get_class(s.gameCode)
+        solver_game = GameClass()
+        first_msg = msg_C(s.gameCode, solver_game, s.finalBoard, remaining_moves=K_MOVES, first=True)
+        eval_ctx = EvalContext(
+            phase='EVAL', messages=[{"role": "system", "content": "You are a helpful assistant."}, first_msg],
+            thinking=THINKING, eval_index=CURRENT_EVAL_INDEX, sample_index=si,
+            game_code=s.gameCode, sequence=s.sequence, final_board=s.finalBoard,
+            GameClass=GameClass, moves_left=K_MOVES, solver_game=solver_game
+        )
+        PENDING_EVAL_CONTEXTS.append(eval_ctx)
+
+# Global evaluation accumulator (moved earlier to avoid forward reference issues)
+EVAL_RUNS: list = []  # list of dict per evaluation index
+CURRENT_EVAL_INDEX: int = -1
+PENDING_EVAL_CONTEXTS: List[Any] = []
+TEST_SAMPLES = None
+
+def load_test_samples():
+    global TEST_SAMPLES
+    if TEST_SAMPLES is None:
+        try:
+            from evalGames import testSamples
+            TEST_SAMPLES = testSamples
+        except Exception:
+            TEST_SAMPLES = []
+    return TEST_SAMPLES
+
+trigger_evaluation()  # initial evaluation at startup
+
+# ----------------------------
+# Priority queue + worker setup
+# ----------------------------
 
 # Priorities: C first, then B, then A (like your heap)
-PHASE_PRIO = {'C': 0, 'B': 1, 'A': 2}
+PHASE_PRIO = {'EVAL': -1, 'C': 0, 'B': 1, 'A': 2}
 
-async def run_workers_and_feed(cfg):
+async def run_workers_and_feed():
     pq = asyncio.PriorityQueue()   # (prio, seq, ctx)
     seq = 0
     pq_lock = asyncio.Lock()       # protects seq
@@ -753,11 +872,11 @@ async def run_workers_and_feed(cfg):
     async def new_phase_A():
         a = PhaseAContext(
             phase='A',
-            messages=messages_for_prompt_A(MOVES=cfg.K_moves),
-            K_moves=cfg.K_moves,
-            N_goals=cfg.N_goals,
-            N_tries=cfg.N_tries,
-            thinking=cfg.thinking,
+            messages=messages_for_prompt_A(MOVES=K_MOVES),
+            K_moves=K_MOVES,
+            N_goals=N_GOALS,
+            N_tries=N_TRIES,
+            thinking=THINKING,
         )
         active_As.append(a)
         await enqueue(a)
@@ -765,6 +884,10 @@ async def run_workers_and_feed(cfg):
     # keep the queue topped up so workers never idle
     async def feeder():
         while True:
+            # push pending eval contexts first
+            while PENDING_EVAL_CONTEXTS:
+                ctx = PENDING_EVAL_CONTEXTS.pop(0)
+                await enqueue(ctx)
             # If low backlog, add more A to spawn B/C work later
             if pq.qsize() < BATCH_GEN_LIMIT // 4:
                 await new_phase_A()
@@ -776,7 +899,7 @@ async def run_workers_and_feed(cfg):
         while True:
             _, _, ctx = await pq.get()
             try:
-                await _gen_one(ctx, thinking=cfg.thinking)
+                await _gen_one(ctx, thinking=THINKING)
                 # After generation, handle -> enqueue followups (B/C) and rewards
                 ctx.handle(
                     enqueue=lambda c: asyncio.create_task(enqueue(c)),  # schedule enqueue without blocking
@@ -787,7 +910,7 @@ async def run_workers_and_feed(cfg):
                 async with ppo_lock:
                     maybe_run_ppo()
                 # optional: logging
-                with open('logs/generations.log','a',encoding='utf-8') as f:
+                with open(GENERATION_LOG,'a',encoding='utf-8') as f:
                     f.write(json.dumps(
                         {"time":datetime.datetime.now().strftime('%Y%m%d-%H%M%S'), "prompt": ctx.last_prompt_text, "response": ctx.last_response_text},
                         ensure_ascii=False
@@ -803,7 +926,7 @@ async def run_workers_and_feed(cfg):
     await asyncio.gather(*workers, *feeders)
     
 async def main():
-    await run_workers_and_feed(cfg)
+    await run_workers_and_feed()
 
 if __name__ == "__main__":
     asyncio.run(main())
