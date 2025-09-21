@@ -16,9 +16,9 @@
 #  B) Build N_goals goal states via multi-turn proposing (Prompt B)
 #  C) For each goal, run N_tries solver attempts (Prompt C)
 # Rewards:
-#  - Phase C: each round in a try gets 1 if goal reached, else 0
-#  - Phase B: each round in building that goal gets (1 - p) if p>0 else 0, where p is success rate from C
-#  - Phase A: single reward = variance of success rates over the N_goals
+#  - Phase C: each round in a try gets (1 if goal reached else 0) - p, where p is success rate of N_TRIES Cs
+#  - Phase B: each round in building that goal gets (1 - p) if p>0 else 0
+#  - Phase A: single reward = variance of success rates over the N_goals * 10
 #
 
 import os
@@ -58,27 +58,7 @@ from peft import LoraConfig
 
 from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
-from settings import (
-    BASE_MODEL,
-    VLLM_URL,
-    VLLM_KEY,
-    KEEP_ACTIVE_ADAPTERS,
-    BATCH_GEN_LIMIT,
-    MAX_TOKENS,
-    PROMPT_MAX_TOKENS,
-    PPO_MAX_TOKENS,
-    TEMPERATURE,
-    SAMPLING_EXTRA,
-    PERM_SAVE_INTERVAL,
-    LOG_FILE,
-    GAME_COMPLETE_LOG,
-    GENERATION_LOG,
-    K_MOVES,
-    N_GOALS,
-    N_TRIES,
-    THINKING,
-    EVAL_PERIOD,
-    EVAL_RESULTS_FILE
+from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, TEMPERATURE, SAMPLING_EXTRA, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE
 )
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
@@ -107,6 +87,12 @@ ppo_cfg = PPOConfig(
     mini_batch_size=1,
     batch_size=1,
 )
+if REINFORCE_STYLE:
+    ppo_cfg.vf_coef=0.0
+    ppo_cfg.cliprange_value=0.0
+    ppo_cfg.gamma=0.0
+    ppo_cfg.lam=0.0
+
 peft_cfg = LoraConfig(
     r=16, lora_alpha=32, 
     target_modules=[
@@ -119,6 +105,10 @@ policy = AutoModelForCausalLMWithValueHead.from_pretrained(
     peft_config=peft_cfg,
     torch_dtype=torch.bfloat16 if torch.cuda.is_available() else None
 )
+if REINFORCE_STYLE:
+    for p in policy.v_head.parameters():
+        p.requires_grad = False
+
 # reduce activation memory
 policy.pretrained_model.config.use_cache = False  # must be off for checkpointing
 policy.pretrained_model.gradient_checkpointing_enable(
@@ -130,7 +120,72 @@ try:
 except Exception:
     raise
 optimizer = bnb.optim.Adam8bit(policy.parameters(), lr=ppo_cfg.learning_rate)
-ppo = PPOTrainer(config=ppo_cfg, model=policy, tokenizer=tokenizer, optimizer=optimizer)
+
+####### Remove value head and use same score for all tokens
+from trl.core import (
+    masked_whiten,
+    masked_mean,
+    masked_var,
+    entropy_from_logits,
+    flatten_dict,
+)
+class REINFORCETrainer(PPOTrainer):
+    def compute_rewards(self, scores, logprobs, ref_logprobs, masks):
+        rewards, non_score_rewards, kls = [], [], []
+        for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
+            # no KL shaping at all
+            kls.append(torch.zeros_like(logprob))
+            non_score_reward = torch.zeros_like(logprob)
+
+            reward = torch.zeros_like(logprob)
+            reward[mask.bool()] = score  # SAME scalar on every response token
+            rewards.append(reward)
+            non_score_rewards.append(non_score_reward)
+
+        return torch.stack(rewards), torch.stack(non_score_rewards), torch.stack(kls)
+
+    def compute_advantages(self, values, rewards, mask):
+        # No baseline, no discounting/smoothing, no whitening
+        values = torch.zeros_like(rewards)
+        advantages = rewards.detach() * mask
+        returns = advantages
+        return values, advantages, returns
+
+    def loss(
+        self,
+        old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
+    ):
+        # standard PPO clipping around the REINFORCE advantage
+        ratio = torch.exp(logprobs - old_logprobs)
+        pg_losses  = -advantages * ratio
+        pg_losses2 = -advantages * torch.clamp(ratio,
+                                               1.0 - self.config.cliprange,
+                                               1.0 + self.config.cliprange)
+        pg_loss = masked_mean(torch.max(pg_losses, pg_losses2), mask)
+
+        # no value loss at all
+        entropy = masked_mean(entropy_from_logits(logits), mask)
+
+        stats = dict(
+            loss=dict(policy=pg_loss.detach(), value=torch.tensor(0.0, device=pg_loss.device), total=pg_loss.detach()),
+            policy=dict(
+                entropy=entropy.detach(),
+                approxkl=0.5 * masked_mean((logprobs - old_logprobs)**2, mask).detach(),
+                policykl=masked_mean(old_logprobs - logprobs, mask).detach(),
+                clipfrac=masked_mean((pg_losses2 > pg_losses).float(), mask).detach(),
+                advantages=advantages.detach(),
+                advantages_mean=masked_mean(advantages, mask).detach(),
+                ratio=ratio.detach(),
+            ),
+            returns=dict(mean=masked_mean(returns, mask).detach(), var=masked_var(returns, mask).detach()),
+            val=dict(vpred=torch.tensor(0.0, device=pg_loss.device), error=torch.tensor(0.0, device=pg_loss.device),
+                     clipfrac=torch.tensor(0.0, device=pg_loss.device),
+                     mean=torch.tensor(0.0, device=pg_loss.device), var=torch.tensor(0.0, device=pg_loss.device)),
+        )
+        # Return (policy loss, 0 * value loss)
+        return pg_loss, torch.tensor(0.0, device=pg_loss.device), flatten_dict(stats)
+
+ppo:PPOTrainer = [PPOTrainer,REINFORCETrainer][REINFORCE_STYLE](config=ppo_cfg, model=policy, tokenizer=tokenizer, optimizer=optimizer)
 
 # Where we write the up-to-date LoRA adapter so vLLM can load it
 ADAPTER_DIR = tempfile.mkdtemp(prefix="ppo_lora_")
@@ -252,7 +307,7 @@ async def _gen_one(ctx, thinking=True):
             prompt=prompt,
             max_tokens=MAX_TOKENS,
             temperature=TEMPERATURE,
-            extra_body=SAMPLING_EXTRA,
+            extra_body=SAMPLING_EXTRA
         )
         ctx.last_response_text = resp.choices[0].text
     except Exception as e:
@@ -471,15 +526,16 @@ class PhaseBContext:
     success_rate: Optional[float] = None
     reward_B: Optional[float] = None
     
-    def _finalize_B(self, p: float, finalize_reward, note: Optional[str] = None):
+    def _finalize_B(self, p: float, finalize_reward, note: Optional[str] = None, force_reward: float = None):
         """Idempotently set success_rate and Reward-B, then finalize."""
         if self.success_rate is None:
             self.success_rate = float(p)
-        # compute once
         if self.reward_B is None:
-            r_b = max(0.0, 1.0 - self.success_rate)  # single definition of Reward-B
+            r_b = max(0.0, 1.0 - self.success_rate)
             if self.success_rate == 0.0:
                 r_b = 0.0
+            if force_reward is not None:
+                r_b = force_reward
             self.reward_B = r_b
             if self.b_sample_indices:
                 note = note or f"p={self.success_rate:.3f}"
@@ -506,6 +562,11 @@ class PhaseBContext:
         successes = sum(1 for c in self.children if bool(c.success))
         tries = len(self.children)
         p = successes / float(tries) if tries > 0 else 0.0
+        # for c in self.children:
+        #     reward_c = (1.0 if c.success else 0.0) - p
+        #     if c.try_sample_indices:
+        #         finalize_reward(c.try_sample_indices, reward_c, Phase.C,
+        #                         note=f"{'Success' if c.success else 'Fail'} (p={p:.3f})")
         self._finalize_B(p, finalize_reward)
 
     def handle(self, enqueue, add_sample, finalize_reward):
@@ -521,7 +582,7 @@ class PhaseBContext:
         self.b_sample_indices.append(idx)
 
         # Choose & validate move
-        chosen = extract_move(self.last_response_text)
+        raw_chosen = chosen = extract_move(self.last_response_text)
         legal = self.proposer_game.get_legal_moves()
         is_valid = chosen == 'DONE' or (chosen is not None and (chosen in legal or str(chosen) in legal))
 
@@ -552,7 +613,7 @@ class PhaseBContext:
         # Terminal conditions
         if self.first_turn and (chosen == 'DONE' or self.moves_left == self.parent_A.K_moves):
             # C always solves in this trivial case -> p = 1.0, Reward-B = 0
-            self._finalize_B(1.0, finalize_reward, note="p=1.000 (DONE on first turn)")
+            self._finalize_B(1.0, finalize_reward, note=f"p=1.000 (DONE on first turn). raw chosen: {raw_chosen}, legal moves: {legal}", force_reward=-1)
             return
 
         # Otherwise, finalize this goal state and spawn C tries
@@ -772,8 +833,15 @@ def maybe_run_ppo():
             query_token_count = qi.numel()
             resp_token_count = ri.numel()
             isRemoved=False
+            isCropped=False
             if query_token_count + resp_token_count <= PPO_MAX_TOKENS:
                 filtered.append((qi, ri, rw, idx))
+            elif query_token_count < PPO_MAX_TOKENS:
+                isCropped=True
+                # Crop response to fit. reward -= 1
+                allowed_resp_tokens = PPO_MAX_TOKENS - query_token_count
+                ri_cropped = ri[:allowed_resp_tokens]
+                filtered.append((qi, ri_cropped, rw-1, idx))
             else:
                 isRemoved=True
                 removed.append({"idx": idx, "query_tokens": int(query_token_count), "resp_tokens": int(resp_token_count)})
@@ -784,7 +852,8 @@ def maybe_run_ppo():
                 "actual_query_tokens": int(query_token_count),
                 "actual_resp_tokens": int(resp_token_count),
                 'sum_tokens': int(query_token_count + resp_token_count),
-                "isRemoved": isRemoved
+                "isCropped": isCropped,
+                "isRemoved": isRemoved,
             })
         if not filtered:
             return
@@ -845,7 +914,8 @@ def load_test_samples():
             TEST_SAMPLES = []
     return TEST_SAMPLES
 
-trigger_evaluation()  # initial evaluation at startup
+if EVAL_AT_INIT:
+    trigger_evaluation()  # initial evaluation at startup
 
 # ----------------------------
 # Priority queue + worker setup
