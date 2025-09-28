@@ -13,3 +13,4 @@ adapter_config.json
 ppo_rollout_log.jsonl
 ppo_lora_adapter/
 asymmetric/logs
+*/wandb/*

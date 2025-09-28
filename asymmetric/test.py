@@ -4,14 +4,17 @@
 #   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 #   CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 8 --max-lora-rank 32 --max_model_len 32000 --data-parallel-size 3
 
+#   vllm serve /inspire/hdd/global_public/public_models/Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 32 --data-parallel-size 7 --data-parallel-size-local 7 --distributed-executor-backend mp --max-model-len 32000
+
 #
 # Python deps:
 # conda create -n assym python=3.10 -y
-#   pip install "trl==0.9.6" "transformers>=4.43" "accelerate" "peft" "torch" "openai>=1.35" "requests" "vllm" "bitsandbytes" "aenum"
-#   "vllm<0.10" "transformers<4.54.0"
-#   "deepspeed"
+#   pip install "trl==0.9.6" "transformers>=4.43" "accelerate" "peft" "torch" "openai>=1.35" "requests" "vllm" "bitsandbytes" "aenum" "vllm<0.10" "transformers<4.54.0" "deepspeed" "wandb"
+#   pip install "trl==0.9.6" "transformers>=4.43" "accelerate" "peft" "torch" "openai>=1.35" "requests" "vllm>0.10" "bitsandbytes" "aenum" "deepspeed" "wandb"
 # export TOKENIZERS_PARALLELISM=true to stop huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks... warning
 # CUDA_VISIBLE_DEVICES=3 accelerate launch --config_file zero1.yaml test.py
+# export WANDB_PROJECT=trl-ppo
+
 #  A) Generate a Game class (Prompt A)
 #  B) Build N_goals goal states via multi-turn proposing (Prompt B)
 #  C) For each goal, run N_tries solver attempts (Prompt C)
@@ -58,7 +61,7 @@ from peft import LoraConfig
 
 from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
-from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, TEMPERATURE, SAMPLING_EXTRA, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE
+from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A
 )
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
@@ -83,9 +86,12 @@ class Phase(enum.Enum):
 # --------------------------------------
 ppo_cfg = PPOConfig(
     model_name=BASE_MODEL,
-    learning_rate=1e-5,
+    learning_rate=LEARNING_RATE,
     mini_batch_size=1,
-    batch_size=1,
+    batch_size=BATCH_SIZE,
+    gradient_accumulation_steps=BATCH_SIZE,
+    cliprange=0.2,
+    log_with='wandb'
 )
 if REINFORCE_STYLE:
     ppo_cfg.vf_coef=0.0
@@ -94,7 +100,7 @@ if REINFORCE_STYLE:
     ppo_cfg.lam=0.0
 
 peft_cfg = LoraConfig(
-    r=16, lora_alpha=32, 
+    r=LORA_RANK, lora_alpha=LORA_RANK*2, 
     target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",]  # adjust to your model
@@ -188,18 +194,25 @@ class REINFORCETrainer(PPOTrainer):
 ppo:PPOTrainer = [PPOTrainer,REINFORCETrainer][REINFORCE_STYLE](config=ppo_cfg, model=policy, tokenizer=tokenizer, optimizer=optimizer)
 
 # Where we write the up-to-date LoRA adapter so vLLM can load it
-ADAPTER_DIR = tempfile.mkdtemp(prefix="ppo_lora_")
 # Permanent adapter directory (saved less frequently)
 PERM_ADAPTER_DIR = os.path.join(os.path.dirname(__file__), "ppo_lora_adapter")
 os.makedirs(PERM_ADAPTER_DIR, exist_ok=True)
+ADAPTER_DIR = PERM_ADAPTER_DIR+'/latest'  # temporary file for current adapter version
+os.makedirs(ADAPTER_DIR, exist_ok=True)
 
 ppo_update_count = 0  # counts successful PPO updates
 
-# remove settings usage in log_event
+LOG_PATH = f'logs/{START_TIME_STR}/'
+os.makedirs(LOG_PATH, exist_ok=True)
+# copy settings and this file to log dir
+import shutil
+shutil.copyfile(os.path.join(os.path.dirname(__file__), "settings.py"), LOG_PATH+"settings.py")
+shutil.copyfile(os.path.join(os.path.dirname(__file__), "test.py"), LOG_PATH+"test.py")
+
 def log_event(event: dict):
     event_with_time = {"ts": time.time(), "time":datetime.datetime.now().strftime('%Y%m%d-%H%M%S'),**event}
-    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(LOG_PATH+LOG_FILE), exist_ok=True)
+    with open(LOG_PATH+LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(event_with_time, ensure_ascii=False) + "\n")
 # ========== vLLM server LoRA management ==========
 def _post(path: str, payload: dict):
@@ -437,6 +450,13 @@ class PhaseAContext:
             if bctx is None or bctx.success_rate is None:
                 return  # not ready
             ps.append(float(bctx.success_rate))
+            
+        if SYNC_REWARDS:
+            averageRewardB = sum(bctx.reward_B for bctx in self.children)/len(self.children)
+            for gi in range(self.N_goals):
+                bctx = self.children[gi]
+                finalize_reward(bctx.b_sample_indices, bctx.reward_B-averageRewardB, Phase.B, note=(bctx.note or "")+f" deducted average B reward={averageRewardB:.3f}")
+            
 
         # All p_i available → finalize Reward-A
         var_p = float(np.var(np.array(ps, dtype=float), ddof=0))
@@ -466,8 +486,7 @@ class PhaseAContext:
             "reward_A": var_p * 10.0,
             "goals": goals_payload
         }
-        os.makedirs("logs", exist_ok=True)
-        with open(GAME_COMPLETE_LOG, "a", encoding="utf-8") as f:
+        with open(LOG_PATH+GAME_COMPLETE_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def handle(self, enqueue, add_sample, finalize_reward):
@@ -525,6 +544,7 @@ class PhaseBContext:
     # computed outcomes
     success_rate: Optional[float] = None
     reward_B: Optional[float] = None
+    note: Optional[str] = None
     
     def _finalize_B(self, p: float, finalize_reward, note: Optional[str] = None, force_reward: float = None):
         """Idempotently set success_rate and Reward-B, then finalize."""
@@ -539,7 +559,9 @@ class PhaseBContext:
             self.reward_B = r_b
             if self.b_sample_indices:
                 note = note or f"p={self.success_rate:.3f}"
-                finalize_reward(self.b_sample_indices, r_b, Phase.B, note=note)
+                if not SYNC_REWARDS:
+                    finalize_reward(self.b_sample_indices, r_b, Phase.B, note=note)
+            self.note=note
         # ask parent A to try finalizing Reward-A
         self.parent_A.maybe_finalize_reward(finalize_reward)
 
@@ -562,11 +584,12 @@ class PhaseBContext:
         successes = sum(1 for c in self.children if bool(c.success))
         tries = len(self.children)
         p = successes / float(tries) if tries > 0 else 0.0
-        # for c in self.children:
-        #     reward_c = (1.0 if c.success else 0.0) - p
-        #     if c.try_sample_indices:
-        #         finalize_reward(c.try_sample_indices, reward_c, Phase.C,
-        #                         note=f"{'Success' if c.success else 'Fail'} (p={p:.3f})")
+        if SYNC_REWARDS:
+            for c in self.children:
+                reward_c = (1.0 if c.success else 0.0) - p
+                if c.try_sample_indices:
+                    finalize_reward(c.try_sample_indices, reward_c, Phase.C,
+                                    note=f"{'Success' if c.success else 'Fail'} (p={p:.3f})")
         self._finalize_B(p, finalize_reward)
 
     def handle(self, enqueue, add_sample, finalize_reward):
@@ -613,7 +636,7 @@ class PhaseBContext:
         # Terminal conditions
         if self.first_turn and (chosen == 'DONE' or self.moves_left == self.parent_A.K_moves):
             # C always solves in this trivial case -> p = 1.0, Reward-B = 0
-            self._finalize_B(1.0, finalize_reward, note=f"p=1.000 (DONE on first turn). raw chosen: {raw_chosen}, legal moves: {legal}", force_reward=-1)
+            self._finalize_B(1.0, finalize_reward, note=f"p=1.000 (DONE on first turn). raw chosen: {raw_chosen}, legal moves: {legal}")
             return
 
         # Otherwise, finalize this goal state and spawn C tries
@@ -697,9 +720,10 @@ class PhaseCContext:
         # Try completed; compute Reward-C for this try
         self.success = (self.solver_game.board == self.goal_board)
         self.is_complete = True
-        r_try = 1.0 if self.success else 0.0
-        if self.try_sample_indices:
-            finalize_reward(self.try_sample_indices, r_try, Phase.C)
+        if not SYNC_REWARDS:
+            r_try = 1.0 if self.success else 0.0
+            if self.try_sample_indices:
+                finalize_reward(self.try_sample_indices, r_try, Phase.C)
 
         # Let Phase B see if all tries are done so it can compute Reward-B
         self.parent_B.maybe_finalize_reward(finalize_reward)
@@ -774,8 +798,7 @@ class EvalContext:
                     per_game_success[g] = per_game_success.get(g, 0) + 1
             per_game_acc = {g: per_game_success.get(g, 0)/c for g, c in per_game_counts.items()}
             run['summary'] = {'overall_acc': overall_acc, 'per_game_acc': per_game_acc}
-            os.makedirs(os.path.dirname(EVAL_RESULTS_FILE), exist_ok=True)
-            with open(EVAL_RESULTS_FILE, 'a', encoding='utf-8') as f:
+            with open(LOG_PATH+EVAL_RESULTS_FILE, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(run, ensure_ascii=False) + '\n')
             log_event({'phase': 'EVAL', 'eval_index': self.eval_index, 'summary': run['summary']})
         self.is_complete = True
@@ -808,7 +831,8 @@ def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optio
     for idx in idx_list:
         if rewards[idx] is None:
             rewards[idx] = t
-            unsent_indices.append(idx)
+            if not (DONT_TRAIN_PHASE_A and phase == Phase.A):
+                unsent_indices.append(idx)
             log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(value), "note": note})
 
 def maybe_run_ppo():
@@ -834,14 +858,15 @@ def maybe_run_ppo():
             resp_token_count = ri.numel()
             isRemoved=False
             isCropped=False
-            if query_token_count + resp_token_count <= PPO_MAX_TOKENS:
+            isRewardZeroAndREINFORCE=REINFORCE_STYLE and rw==0
+            if query_token_count + resp_token_count <= PPO_MAX_TOKENS and not isRewardZeroAndREINFORCE: # 0 reward doesnt change model in REINFORCE
                 filtered.append((qi, ri, rw, idx))
-            elif query_token_count < PPO_MAX_TOKENS:
+            elif query_token_count < PPO_MAX_TOKENS and not isRewardZeroAndREINFORCE:
                 isCropped=True
-                # Crop response to fit. reward -= 1
+                # Crop response to fit. reward is unchanged.
                 allowed_resp_tokens = PPO_MAX_TOKENS - query_token_count
                 ri_cropped = ri[:allowed_resp_tokens]
-                filtered.append((qi, ri_cropped, rw-1, idx))
+                filtered.append((qi, ri_cropped, rw, idx))
             else:
                 isRemoved=True
                 removed.append({"idx": idx, "query_tokens": int(query_token_count), "resp_tokens": int(resp_token_count)})
@@ -863,7 +888,7 @@ def maybe_run_ppo():
         # Permanent save every settings.perm_save_interval updates
         global ppo_update_count
         ppo_update_count += 1
-        if ppo_update_count % 32 == 0:
+        if ppo_update_count % 1 == 0:
             # Load a NEW versioned adapter and switch new requests to it.
             # Older adapters remain temporarily loaded to avoid races.
             load_new_adapter_version()
@@ -980,7 +1005,7 @@ async def run_workers_and_feed():
                 async with ppo_lock:
                     maybe_run_ppo()
                 # optional: logging
-                with open(GENERATION_LOG,'a',encoding='utf-8') as f:
+                with open(LOG_PATH+GENERATION_LOG,'a',encoding='utf-8') as f:
                     f.write(json.dumps(
                         {"time":datetime.datetime.now().strftime('%Y%m%d-%H%M%S'), "prompt": ctx.last_prompt_text, "response": ctx.last_response_text},
                         ensure_ascii=False

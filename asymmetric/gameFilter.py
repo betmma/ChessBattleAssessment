@@ -70,6 +70,10 @@ def _filterGame(GameClass: AbstractSystem)->FilterGameResult:
         g2.execute_move(g2.get_legal_moves()[0])
     if g.board!=g2.board:
         return FilterGameResult.NOT_DEFINITE
+    for t in range(10):
+        g=GameClass()
+        for i in range(8):
+            g.execute_move(random.choice(g.get_legal_moves())) # make more moves to check possible late error (like large number to float)
     states=[game1.board]
     count=0
     queue=[game1]
