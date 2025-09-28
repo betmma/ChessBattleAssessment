@@ -368,7 +368,7 @@ PROMPT_B_FIRST_TMPL = """Game code:\n```\n{GAME_CODE}\n```\nYou are generating a
 
 PROMPT_B_CONT_TMPL = """Remaining moves you may still play: {remaining_moves}\nLegal moves: {legal}\nCurrent board:\n{board}\nEnd your response with "#### Move chosen\n X" (without quotes), where X is one of the legal moves exactly as an element appearing in the list above, or DONE to finish early."""
 
-PROMPT_C_FIRST_TMPL = """Game code:\n```\n{GAME_CODE}\n```\nYou task is to sequentially play moves to reach goal state.\nRemaining moves you may still play: {remaining_moves}\nNote that in each reply you can only choose one move, but you can continue in further replies if remaining moves is larger than 1.\nLegal moves: {legal}\nCurrent board:\n{board}\nGoal board:\n{goal_board}\nYou can add some explanation or plan in your response, but must end your response with "#### Move chosen\n X" (without quotes), where X is one of the legal moves exactly as an element appearing in the list above."""
+PROMPT_C_FIRST_TMPL = """Game code:\n```\n{GAME_CODE}\n```\nYou task is to sequentially play moves to reach goal state.\nRemaining moves you may still play (you may not need all the moves to complete): {remaining_moves}\nNote that in each reply you can only choose one move, but you can continue in further replies if remaining moves is larger than 1.\nLegal moves: {legal}\nCurrent board:\n{board}\nGoal board:\n{goal_board}\nYou can add some explanation or plan in your response, but must end your response with "#### Move chosen\n X" (without quotes), where X is one of the legal moves exactly as an element appearing in the list above."""
 
 PROMPT_C_CONT_TMPL = """Remaining moves you may still play: {remaining_moves}\nLegal moves: {legal}\nCurrent board:\n{board}\nGoal board:\n{goal_board}\nEnd your response with "#### Move chosen\n X" (without quotes), where X is one of the legal moves exactly as an element appearing in the list above."""
 # ----------------------------
@@ -812,6 +812,10 @@ query_texts: List[str] = []
 response_texts: List[str] = []
 rewards: List[Optional[torch.Tensor]] = []  # None until finalized
 unsent_indices: List[int] = []  # indices whose rewards known but not yet sent to PPO
+# Prepared tensors for training (built at enqueue time to avoid re-tokenizing & to apply filtering once)
+prepared_query_ids: Dict[int, torch.Tensor] = {}
+prepared_resp_ids: Dict[int, torch.Tensor] = {}
+
 
 def add_sample(prompt_text: str, response_text: str, reward_value: Optional[float]):
     idx = len(rewards)
@@ -822,9 +826,11 @@ def add_sample(prompt_text: str, response_text: str, reward_value: Optional[floa
     else:
         t = torch.tensor(reward_value, device=ppo.accelerator.device)
         rewards.append(t)
-        unsent_indices.append(idx)
+        # Filter and enqueue at append-time to keep batch size consistent
+        _enqueue_idx_for_ppo(idx)
         log_event({"prompt_text": prompt_text, "response_text": response_text, "reward": float(t.item())})
     return idx
+
 
 def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optional[str] = ''):
     t = torch.tensor(float(value), device=ppo.accelerator.device)
@@ -832,8 +838,65 @@ def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optio
         if rewards[idx] is None:
             rewards[idx] = t
             if not (DONT_TRAIN_PHASE_A and phase == Phase.A):
-                unsent_indices.append(idx)
+                # Filter and enqueue at append-time to keep batch size consistent
+                _enqueue_idx_for_ppo(idx)
             log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(value), "note": note})
+
+
+def _enqueue_idx_for_ppo(idx: int) -> None:
+    """Tokenize, filter/crop, and enqueue a sample index for PPO training.
+    This applies the same logic previously used in maybe_run_ppo filtering,
+    but does it once at append-time to avoid batch size mismatches.
+    """
+    # Guard: reward must exist
+    rw = rewards[idx]
+    if rw is None:
+        return
+
+    qt = query_texts[idx]
+    rt = response_texts[idx]
+
+    qi = to_ids(qt)
+    ri = to_ids(rt)
+
+    query_token_count = qi.numel()
+    resp_token_count = ri.numel()
+
+    isRemoved = False
+    isCropped = False
+
+    # In REINFORCE style, zero-reward samples do not update the model
+    isRewardZeroAndREINFORCE = bool(REINFORCE_STYLE and float(rw.item()) == 0.0)
+
+    if not isRewardZeroAndREINFORCE:
+        if query_token_count + resp_token_count <= PPO_MAX_TOKENS:
+            prepared_query_ids[idx] = qi
+            prepared_resp_ids[idx] = ri
+            unsent_indices.append(idx)
+        elif query_token_count < PPO_MAX_TOKENS:
+            isCropped = True
+            # Crop response to fit. reward is unchanged.
+            allowed_resp_tokens = PPO_MAX_TOKENS - query_token_count
+            ri_cropped = ri[:allowed_resp_tokens]
+            prepared_query_ids[idx] = qi
+            prepared_resp_ids[idx] = ri_cropped
+            unsent_indices.append(idx)
+        else:
+            isRemoved = True
+    else:
+        isRemoved = True
+
+    log_event({
+        "phase": "FILTER",
+        "query_text": qt,
+        "resp_text": rt,
+        "actual_query_tokens": int(query_token_count),
+        "actual_resp_tokens": int(resp_token_count),
+        "sum_tokens": int(query_token_count + resp_token_count),
+        "isCropped": isCropped,
+        "isRemoved": isRemoved,
+    })
+
 
 def maybe_run_ppo():
     while len(unsent_indices) >= ppo.config.batch_size:
@@ -844,47 +907,14 @@ def maybe_run_ppo():
         remaining = unsent_indices[len(batch_indices):]
         unsent_indices.clear()
         unsent_indices.extend(remaining)
-        query_ids = [to_ids(query_texts[i]) for i in batch_indices]
-        resp_ids = [to_ids(response_texts[i]) for i in batch_indices]
+
+        # Use pre-tokenized, pre-filtered tensors
+        query_ids = [prepared_query_ids[i] for i in batch_indices]
+        resp_ids = [prepared_resp_ids[i] for i in batch_indices]
         batch_rewards = [rewards[i] for i in batch_indices]
-        # Filter out overly long sequences (> PPO_MAX_TOKENS tokens)
-        filtered = []
-        removed = []
-        # Only iterate over the selected batch items, not all items
-        batch_query_texts = [query_texts[i] for i in batch_indices]
-        batch_response_texts = [response_texts[i] for i in batch_indices]
-        for qt, rt, qi, ri, rw, idx in zip(batch_query_texts, batch_response_texts, query_ids, resp_ids, batch_rewards, batch_indices):
-            query_token_count = qi.numel()
-            resp_token_count = ri.numel()
-            isRemoved=False
-            isCropped=False
-            isRewardZeroAndREINFORCE=REINFORCE_STYLE and rw==0
-            if query_token_count + resp_token_count <= PPO_MAX_TOKENS and not isRewardZeroAndREINFORCE: # 0 reward doesnt change model in REINFORCE
-                filtered.append((qi, ri, rw, idx))
-            elif query_token_count < PPO_MAX_TOKENS and not isRewardZeroAndREINFORCE:
-                isCropped=True
-                # Crop response to fit. reward is unchanged.
-                allowed_resp_tokens = PPO_MAX_TOKENS - query_token_count
-                ri_cropped = ri[:allowed_resp_tokens]
-                filtered.append((qi, ri_cropped, rw, idx))
-            else:
-                isRemoved=True
-                removed.append({"idx": idx, "query_tokens": int(query_token_count), "resp_tokens": int(resp_token_count)})
-            log_event({
-                "phase": "FILTER", 
-                "query_text": qt,  
-                "resp_text": rt,    
-                "actual_query_tokens": int(query_token_count),
-                "actual_resp_tokens": int(resp_token_count),
-                'sum_tokens': int(query_token_count + resp_token_count),
-                "isCropped": isCropped,
-                "isRemoved": isRemoved,
-            })
-        if not filtered:
-            return
-        query_ids, resp_ids, batch_rewards, batch_indices = zip(*filtered)
+
         stats = ppo.step(list(query_ids), list(resp_ids), list(batch_rewards))
-        log_event({"phase": "PPO", "stats": {k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in stats.items()}, "num_samples": len(filtered)})
+        log_event({"phase": "PPO", "stats": {k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in stats.items()}, "num_samples": len(batch_indices)})
         # Permanent save every settings.perm_save_interval updates
         global ppo_update_count
         ppo_update_count += 1
@@ -893,12 +923,12 @@ def maybe_run_ppo():
             # Older adapters remain temporarily loaded to avoid races.
             load_new_adapter_version()
         if ppo_update_count % PERM_SAVE_INTERVAL == 0:
-            path=PERM_ADAPTER_DIR+'/'+START_TIME_STR+f'/{ppo_update_count}'
+            path = PERM_ADAPTER_DIR + '/' + START_TIME_STR + f'/{ppo_update_count}'
             ppo.model.pretrained_model.save_pretrained(path)
             log_event({"phase": "PERM_SAVE", "update": ppo_update_count, "path": path})
             # trigger evaluation if period reached
             if (ppo_update_count % (PERM_SAVE_INTERVAL * EVAL_PERIOD) == 0):
-                    trigger_evaluation()
+                trigger_evaluation()
 
 
 def trigger_evaluation():
