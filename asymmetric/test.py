@@ -45,6 +45,43 @@ import heapq, openai
 from accelerate import Accelerator
 acc = Accelerator()  # makes AcceleratorState() initialized on every rank
 
+import wandb
+def _wandb_log(data: Dict[str, float], *, step: Optional[int] = None, commit: Optional[bool] = None) -> None:
+    if not data:
+        return
+    kwargs: Dict[str, Any] = {}
+    if step is not None:
+        kwargs["step"] = step
+    if commit is not None:
+        kwargs["commit"] = commit
+    wandb.log(data, **kwargs)
+
+
+def _sanitize_wandb_key(raw: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_\-./]+", "_", raw)
+    sanitized = sanitized.strip('_')
+    if not sanitized:
+        sanitized = "unnamed"
+    return sanitized[:128]
+
+
+def _to_scalar(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, torch.Tensor):
+        try:
+            if value.numel() == 1:
+                return float(value.item())
+            return None
+        except Exception:
+            return None
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return float(value.item())
+        except Exception:
+            return None
+    return None
+
 # If running with DeepSpeed, make sure micro-batch is set even if you won't pass a dataloader.
 if acc.state.deepspeed_plugin is not None:
     ds_cfg = acc.state.deepspeed_plugin.deepspeed_config
@@ -127,70 +164,7 @@ except Exception:
     raise
 optimizer = bnb.optim.Adam8bit(policy.parameters(), lr=ppo_cfg.learning_rate)
 
-####### Remove value head and use same score for all tokens
-from trl.core import (
-    masked_whiten,
-    masked_mean,
-    masked_var,
-    entropy_from_logits,
-    flatten_dict,
-)
-class REINFORCETrainer(PPOTrainer):
-    def compute_rewards(self, scores, logprobs, ref_logprobs, masks):
-        rewards, non_score_rewards, kls = [], [], []
-        for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
-            # no KL shaping at all
-            kls.append(torch.zeros_like(logprob))
-            non_score_reward = torch.zeros_like(logprob)
-
-            reward = torch.zeros_like(logprob)
-            reward[mask.bool()] = score  # SAME scalar on every response token
-            rewards.append(reward)
-            non_score_rewards.append(non_score_reward)
-
-        return torch.stack(rewards), torch.stack(non_score_rewards), torch.stack(kls)
-
-    def compute_advantages(self, values, rewards, mask):
-        # No baseline, no discounting/smoothing, no whitening
-        values = torch.zeros_like(rewards)
-        advantages = rewards.detach() * mask
-        returns = advantages
-        return values, advantages, returns
-
-    def loss(
-        self,
-        old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
-    ):
-        # standard PPO clipping around the REINFORCE advantage
-        ratio = torch.exp(logprobs - old_logprobs)
-        pg_losses  = -advantages * ratio
-        pg_losses2 = -advantages * torch.clamp(ratio,
-                                               1.0 - self.config.cliprange,
-                                               1.0 + self.config.cliprange)
-        pg_loss = masked_mean(torch.max(pg_losses, pg_losses2), mask)
-
-        # no value loss at all
-        entropy = masked_mean(entropy_from_logits(logits), mask)
-
-        stats = dict(
-            loss=dict(policy=pg_loss.detach(), value=torch.tensor(0.0, device=pg_loss.device), total=pg_loss.detach()),
-            policy=dict(
-                entropy=entropy.detach(),
-                approxkl=0.5 * masked_mean((logprobs - old_logprobs)**2, mask).detach(),
-                policykl=masked_mean(old_logprobs - logprobs, mask).detach(),
-                clipfrac=masked_mean((pg_losses2 > pg_losses).float(), mask).detach(),
-                advantages=advantages.detach(),
-                advantages_mean=masked_mean(advantages, mask).detach(),
-                ratio=ratio.detach(),
-            ),
-            returns=dict(mean=masked_mean(returns, mask).detach(), var=masked_var(returns, mask).detach()),
-            val=dict(vpred=torch.tensor(0.0, device=pg_loss.device), error=torch.tensor(0.0, device=pg_loss.device),
-                     clipfrac=torch.tensor(0.0, device=pg_loss.device),
-                     mean=torch.tensor(0.0, device=pg_loss.device), var=torch.tensor(0.0, device=pg_loss.device)),
-        )
-        # Return (policy loss, 0 * value loss)
-        return pg_loss, torch.tensor(0.0, device=pg_loss.device), flatten_dict(stats)
-
+from reinforce import REINFORCETrainer
 ppo:PPOTrainer = [PPOTrainer,REINFORCETrainer][REINFORCE_STYLE](config=ppo_cfg, model=policy, tokenizer=tokenizer, optimizer=optimizer)
 
 # Where we write the up-to-date LoRA adapter so vLLM can load it
@@ -801,6 +775,14 @@ class EvalContext:
             with open(LOG_PATH+EVAL_RESULTS_FILE, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(run, ensure_ascii=False) + '\n')
             log_event({'phase': 'EVAL', 'eval_index': self.eval_index, 'summary': run['summary']})
+            wandb_payload = {
+                'eval/overall_accuracy': overall_acc,
+                'eval/num_samples': float(len(samples))
+            }
+            for game_name, acc_val in per_game_acc.items():
+                sanitized_game = _sanitize_wandb_key(str(game_name))
+                wandb_payload[f'eval/per_game/{sanitized_game}'] = float(acc_val)
+            _wandb_log(wandb_payload, step=ppo_update_count if ppo_update_count > 0 else None, commit=True)
         self.is_complete = True
 
 # ----------------------------
@@ -841,6 +823,10 @@ def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optio
                 # Filter and enqueue at append-time to keep batch size consistent
                 _enqueue_idx_for_ppo(idx)
             log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(value), "note": note})
+    wandb_metrics = {f"reward/{phase.value}": float(value)}
+    if len(idx_list) > 1:
+        wandb_metrics[f"reward/{phase.value}_num_samples"] = float(len(idx_list))
+    _wandb_log(wandb_metrics)
 
 
 def _enqueue_idx_for_ppo(idx: int) -> None:
@@ -918,6 +904,15 @@ def maybe_run_ppo():
         # Permanent save every settings.perm_save_interval updates
         global ppo_update_count
         ppo_update_count += 1
+        wandb_metrics = {
+            "ppo/update_count": float(ppo_update_count),
+            "ppo/batch_size": float(len(batch_indices)),
+        }
+        for key, val in stats.items():
+            scalar = _to_scalar(val)
+            if scalar is not None and np.isfinite(scalar):
+                wandb_metrics[f"ppo/{_sanitize_wandb_key(str(key))}"] = float(scalar)
+        _wandb_log(wandb_metrics, step=ppo_update_count)
         if ppo_update_count % 1 == 0:
             # Load a NEW versioned adapter and switch new requests to it.
             # Older adapters remain temporarily loaded to avoid races.
