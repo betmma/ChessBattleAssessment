@@ -2,7 +2,7 @@
 # Start vLLM server first (example):
 # !!REMEMBER TO SET BELOW ENV VAR
 #   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
-#   CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 8 --max-lora-rank 32 --max_model_len 32000 --data-parallel-size 3
+#   CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 16 --max_model_len 16000 --data-parallel-size 3
 
 #   vllm serve /inspire/hdd/global_public/public_models/Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 32 --data-parallel-size 7 --data-parallel-size-local 7 --distributed-executor-backend mp --max-model-len 32000
 
@@ -44,10 +44,15 @@ import heapq, openai
 
 from accelerate import Accelerator
 acc = Accelerator()  # makes AcceleratorState() initialized on every rank
+IS_MAIN = acc.is_main_process
+ppo_step = 0
+reward_step = 0
+eval_step = 0
+
 
 import wandb
 def _wandb_log(data: Dict[str, float], *, step: Optional[int] = None, commit: Optional[bool] = None) -> None:
-    if not data:
+    if not data or not IS_MAIN:
         return
     kwargs: Dict[str, Any] = {}
     if step is not None:
@@ -98,7 +103,7 @@ from peft import LoraConfig
 
 from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
-from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A
+from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A, USE_FIXED_GAMES
 )
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
@@ -128,6 +133,7 @@ ppo_cfg = PPOConfig(
     batch_size=BATCH_SIZE,
     gradient_accumulation_steps=BATCH_SIZE,
     cliprange=0.2,
+    target_kl=0.2,
     log_with='wandb'
 )
 if REINFORCE_STYLE:
@@ -166,6 +172,8 @@ optimizer = bnb.optim.Adam8bit(policy.parameters(), lr=ppo_cfg.learning_rate)
 
 from reinforce import REINFORCETrainer
 ppo:PPOTrainer = [PPOTrainer,REINFORCETrainer][REINFORCE_STYLE](config=ppo_cfg, model=policy, tokenizer=tokenizer, optimizer=optimizer)
+wandb.define_metric("reward/*", step_metric="reward_step")
+wandb.define_metric("ppo/*", step_metric="ppo_step")
 
 # Where we write the up-to-date LoRA adapter so vLLM can load it
 # Permanent adapter directory (saved less frequently)
@@ -724,7 +732,7 @@ class EvalContext:
     is_complete: bool = False
 
     def handle(self, enqueue, add_sample, finalize_reward):
-        global EVAL_RUNS
+        global EVAL_RUNS, eval_step
         if self.model_moves is None:
             self.model_moves = []
         add_sample(self.last_prompt_text, self.last_response_text, None)
@@ -776,13 +784,15 @@ class EvalContext:
                 f.write(json.dumps(run, ensure_ascii=False) + '\n')
             log_event({'phase': 'EVAL', 'eval_index': self.eval_index, 'summary': run['summary']})
             wandb_payload = {
+                "eval_step": float(eval_step),
                 'eval/overall_accuracy': overall_acc,
                 'eval/num_samples': float(len(samples))
             }
+            eval_step += 1
             for game_name, acc_val in per_game_acc.items():
                 sanitized_game = _sanitize_wandb_key(str(game_name))
                 wandb_payload[f'eval/per_game/{sanitized_game}'] = float(acc_val)
-            _wandb_log(wandb_payload, step=ppo_update_count if ppo_update_count > 0 else None, commit=True)
+            _wandb_log(wandb_payload, commit=True)
         self.is_complete = True
 
 # ----------------------------
@@ -815,6 +825,7 @@ def add_sample(prompt_text: str, response_text: str, reward_value: Optional[floa
 
 
 def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optional[str] = ''):
+    global reward_step
     t = torch.tensor(float(value), device=ppo.accelerator.device)
     for idx in idx_list:
         if rewards[idx] is None:
@@ -823,10 +834,11 @@ def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optio
                 # Filter and enqueue at append-time to keep batch size consistent
                 _enqueue_idx_for_ppo(idx)
             log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(value), "note": note})
-    wandb_metrics = {f"reward/{phase.value}": float(value)}
+    wandb_metrics = {"reward_step": float(reward_step),f"reward/{phase.value}": float(value)}
     if len(idx_list) > 1:
         wandb_metrics[f"reward/{phase.value}_num_samples"] = float(len(idx_list))
-    _wandb_log(wandb_metrics)
+    _wandb_log(wandb_metrics, commit=True)
+    reward_step += 1
 
 
 def _enqueue_idx_for_ppo(idx: int) -> None:
@@ -885,6 +897,7 @@ def _enqueue_idx_for_ppo(idx: int) -> None:
 
 
 def maybe_run_ppo():
+    global ppo_step
     while len(unsent_indices) >= ppo.config.batch_size:
         batch_indices = unsent_indices[:ppo.config.batch_size]
         if not batch_indices:
@@ -905,6 +918,7 @@ def maybe_run_ppo():
         global ppo_update_count
         ppo_update_count += 1
         wandb_metrics = {
+            "ppo_step": float(ppo_step),
             "ppo/update_count": float(ppo_update_count),
             "ppo/batch_size": float(len(batch_indices)),
         }
@@ -912,7 +926,8 @@ def maybe_run_ppo():
             scalar = _to_scalar(val)
             if scalar is not None and np.isfinite(scalar):
                 wandb_metrics[f"ppo/{_sanitize_wandb_key(str(key))}"] = float(scalar)
-        _wandb_log(wandb_metrics, step=ppo_update_count)
+        _wandb_log(wandb_metrics, commit=True)
+        ppo_step += 1
         if ppo_update_count % 1 == 0:
             # Load a NEW versioned adapter and switch new requests to it.
             # Older adapters remain temporarily loaded to avoid races.
@@ -953,16 +968,26 @@ EVAL_RUNS: list = []  # list of dict per evaluation index
 CURRENT_EVAL_INDEX: int = -1
 PENDING_EVAL_CONTEXTS: List[Any] = []
 TEST_SAMPLES = None
+TEST_GAMES_CODE = None
 
 def load_test_samples():
-    global TEST_SAMPLES
+    global TEST_SAMPLES,TEST_GAMES_CODE
     if TEST_SAMPLES is None:
         try:
-            from evalGames import testSamples
+            from evalGames import testSamples, testGamesCode
             TEST_SAMPLES = testSamples
+            TEST_GAMES_CODE = testGamesCode
         except Exception:
             TEST_SAMPLES = []
     return TEST_SAMPLES
+load_test_samples()
+
+testGameCodeIndex=0
+def get_next_test_game_code():
+    global testGameCodeIndex
+    code = TEST_GAMES_CODE[testGameCodeIndex % len(TEST_GAMES_CODE)]
+    testGameCodeIndex+=1
+    return code
 
 if EVAL_AT_INIT:
     trigger_evaluation()  # initial evaluation at startup
@@ -1019,7 +1044,17 @@ async def run_workers_and_feed():
         while True:
             _, _, ctx = await pq.get()
             try:
-                await _gen_one(ctx, thinking=THINKING)
+                if USE_FIXED_GAMES and ctx.phase == 'A':
+                    prompt = tokenizer.apply_chat_template(
+                        ctx.messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                        enable_thinking=THINKING,
+                    )
+                    ctx.last_prompt_text = prompt
+                    ctx.last_response_text = get_next_test_game_code()
+                else:
+                    await _gen_one(ctx, thinking=THINKING)
                 # After generation, handle -> enqueue followups (B/C) and rewards
                 ctx.handle(
                     enqueue=lambda c: asyncio.create_task(enqueue(c)),  # schedule enqueue without blocking

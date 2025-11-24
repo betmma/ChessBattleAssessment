@@ -35,5 +35,6 @@ SAMPLING_EXTRA = {"top_p": TOP_P, "top_k": TOP_K,}# "repetition_penalty": 1.005}
 REINFORCE_STYLE = False # remove value head, use only policy head and REINFORCE style policy gradient
 SYNC_REWARDS = True # whether to sync N_TRIES phase C rewards to appear only if all N_TRIES phase C finished (if false, early stopped games will send lower rewards before full length game rewards, and can cause uneven distribution), and deduct it by p(success), imitating grpo. same to phase Bs
 DONT_TRAIN_PHASE_A = True # phase A reward is much less (K_MOVES * N_GOALS * N_TRIES times than phase C, except for failed games) but causes many negative rewards in the beginning (failed games)
+USE_FIXED_GAMES = True # use 5 evalGames instead of let model generate (remove phase A). DONT_TRAIN_PHASE_A should be True if this is True.
 
 # it's normal to see one-step problems coming first, since one-step problems end faster than multi-step problems and are sent to phase C earlier.
