@@ -1,8 +1,7 @@
 # ==== PPO + vLLM SERVER (OpenAI API) one-step pipeline for your A/B/C flow ====
 # Start vLLM server first (example):
 # !!REMEMBER TO SET BELOW ENV VAR
-#   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
-#   CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 16 --max_model_len 16000 --data-parallel-size 3
+#   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True ; CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 16 --max_model_len 16000 --data-parallel-size 3
 
 #   vllm serve /inspire/hdd/global_public/public_models/Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 32 --data-parallel-size 7 --data-parallel-size-local 7 --distributed-executor-backend mp --max-model-len 32000
 
@@ -103,7 +102,7 @@ from peft import LoraConfig
 
 from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
-from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A, USE_FIXED_GAMES
+from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, CROP_PENALTY_PER_TOKEN, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A, USE_FIXED_GAMES
 )
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
@@ -873,7 +872,9 @@ def _enqueue_idx_for_ppo(idx: int) -> None:
             unsent_indices.append(idx)
         elif query_token_count < PPO_MAX_TOKENS:
             isCropped = True
-            # Crop response to fit. reward is unchanged.
+            # Crop response to fit. reward is deducted by CROP_PENALTY_PER_TOKEN * cropped_token_count.
+            cropped_token_count = query_token_count + resp_token_count - PPO_MAX_TOKENS
+            rewards[idx] -= CROP_PENALTY_PER_TOKEN * cropped_token_count
             allowed_resp_tokens = PPO_MAX_TOKENS - query_token_count
             ri_cropped = ri[:allowed_resp_tokens]
             prepared_query_ids[idx] = qi

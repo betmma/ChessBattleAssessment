@@ -33,8 +33,10 @@ class System(AbstractSystem):
         return [0, 1]
 
     def execute_move(self, move: int) -> None:
-        self.board[0] += 1
-        if move == 1:
+        if move == 0:
+            self.board[0] += 1
+        elif move == 1:
+            self.board[0] += 1
             self.board[1] += self.board[0]
 '''
 sequences=[[0, 0], [0, 1], [1, 0], [1, 1], [0, 1], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0], [0, 0, 1, 1], [0, 1, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 1, 1], [0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 0, 1, 1], [0, 0, 0, 0, 0, 1, 0, 0]]
@@ -53,7 +55,6 @@ class System(AbstractSystem):
 
     def execute_move(self, move: int) -> None:
         n=len(self.board)
-        self.board[move] += 1
         
         left_neighbor_idx = (move - 1 + n) % n
         right_neighbor_idx = (move + 1) % n
@@ -61,7 +62,7 @@ class System(AbstractSystem):
         self.board[left_neighbor_idx] = 1 - self.board[left_neighbor_idx]
         self.board[right_neighbor_idx] = 1 - self.board[right_neighbor_idx]
 '''
-sequences=[[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 2], [0, 0, 0, 3], [0, 0, 0, 4], [3, 4, 1, 2, 2, 2], [1, 4, 2, 4, 1, 3], [0, 2, 2, 2, 0, 4], [2, 0, 3, 0, 0, 1], [1, 2, 1, 3, 4, 3], [0, 1, 3, 1, 4, 2, 1, 0], [1, 0, 1, 3, 4, 0, 3, 2], [3, 0, 0, 3, 3, 2, 4, 1], [2, 1, 0, 3, 1, 1, 0, 2], [4, 1, 2, 1, 3, 4, 0, 4]]
+sequences=[[0], [1], [2], [3], [4], [2, 4], [0, 1], [0, 2], [0, 3], [0, 4], [0, 1, 2], [0, 2, 3], [0, 2, 4], [1, 2, 4], [1, 3, 4], [0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 4]]
 batchAdd(game, sequences)
 
 game='''
@@ -76,59 +77,59 @@ class System(AbstractSystem):
 
     def execute_move(self, move: int) -> None:
         if move == 0:
-            self.board[0] += self.board[0] & (self.board[0] + 31)
+            self.board[0] += 5
         elif move == 1:
             self.board[0] = int(str(self.board[0])[::-1])
         elif move == 2:
-            self.board[0] |= self.board[0] + 1
+            self.board[0] -= 3
 '''
-sequences=[[0, 0], [0, 1], [0, 2], [1, 2], [2, 0], [0, 0, 1, 0], [0, 0, 1, 2], [0, 0, 2, 2], [0, 1, 0, 0], [0, 1, 0, 2], [0, 0, 1, 2, 1, 0], [0, 0, 2, 2, 1, 0], [0, 1, 0, 0, 0, 0], [0, 1, 0, 0, 0, 2], [0, 1, 0, 0, 1, 0], [1, 0, 0, 0, 0, 0, 1, 2], [1, 0, 0, 1, 0, 0, 1, 1], [1, 0, 1, 0, 2, 2, 1, 0], [0, 2, 0, 1, 2, 1, 2, 0], [0, 0, 1, 2, 0, 0, 0, 2]]
+sequences=[[0, 0], [0, 2], [0, 1], [1, 2], [1, 0], [0, 0, 2, 1], [0, 0, 2, 0], [0, 0, 2, 2], [0, 0, 1, 2], [0, 0, 0, 1], [0, 0, 2, 1, 0, 2], [0, 0, 2, 1, 0, 1], [0, 0, 2, 1, 2, 1], [0, 0, 2, 0, 0, 1], [0, 0, 2, 0, 0, 2], [0, 0, 2, 1, 0, 2, 1, 2], [0, 0, 2, 0, 0, 2, 0, 1], [0, 0, 2, 0, 2, 1, 0, 0], [0, 0, 1, 2, 2, 2, 2, 2], [0, 0, 0, 1, 2, 1, 0, 0]]
 batchAdd(game, sequences)
 
 game='''
 from typing import List, Any, Optional, Tuple
 
 class System(AbstractSystem):
-    def create_initial_board(self) -> List[int]:
-        return [2, 3, 5, 7, 11, 13]
+    def create_initial_board(self) -> List[List[int]]:
+        # 3 stacks
+        return [[3, 2, 1], [], []]
 
     def get_legal_moves(self) -> List[Tuple[int, int]]:
+        # Move top item from stack i to stack j
         moves = []
-        n = len(self.board)
-        for i in range(n):
-            for j in range(n):
-                if i != j:
+        for i in range(3):
+            for j in range(3):
+                if i != j and self.board[i] and (not self.board[j] or self.board[j][-1] > self.board[i][-1]):
+                    # Legal if dest is empty OR top of dest > moving item (Towers of Hanoi rules)
                     moves.append((i, j))
         return moves
 
     def execute_move(self, move: Tuple[int, int]) -> None:
-        i, j = move
-        val_i, val_j = self.board[i], self.board[j]
-        if val_i != 0:
-            self.board[j] = val_j // val_i
-            self.board[i] = val_i + 1
+        src, dst = move
+        val = self.board[src].pop()
+        self.board[dst].append(val)
 '''
-sequences=[[(0, 1), (0, 1)], [(0, 1), (0, 2)], [(0, 1), (0, 3)], [(0, 1), (0, 4)], [(0, 1), (0, 5)], [(2, 5), (3, 4), (4, 5), (0, 5)], [(0, 2), (0, 3), (4, 0), (2, 1)], [(1, 2), (4, 1), (0, 5), (0, 3)], [(1, 0), (4, 2), (2, 4), (1, 3)], [(5, 2), (5, 1), (1, 3), (5, 3)], [(0, 1), (5, 2), (5, 1), (4, 0), (5, 1), (5, 3)], [(5, 4), (5, 4), (3, 5), (5, 0), (3, 1), (4, 5)], [(1, 2), (5, 0), (0, 3), (3, 2), (0, 2), (4, 3)], [(2, 1), (1, 3), (2, 5), (3, 0), (4, 0), (3, 0)], [(3, 0), (3, 4), (2, 1), (0, 3), (3, 0), (1, 5)], [(3, 5), (5, 0), (1, 0), (5, 3), (1, 2), (2, 0), (5, 4), (2, 5)], [(3, 0), (1, 5), (3, 0), (5, 4), (1, 5), (3, 4), (3, 2), (5, 2)], [(4, 2), (1, 4), (0, 5), (1, 4), (3, 4), (1, 5), (2, 0), (2, 3)], [(3, 1), (1, 3), (4, 3), (0, 3), (4, 2), (4, 3), (5, 2), (5, 2)], [(1, 0), (4, 2), (0, 5), (0, 5), (1, 0), (3, 0), (3, 2), (4, 1)]]
+sequences=[[(0, 1), (0, 2)], [(0, 2), (0, 1)], [(0, 1), (0, 2), (1, 2)], [(0, 1), (0, 2), (1, 0)], [(0, 2), (0, 1), (2, 1)], [(0, 2), (0, 1), (2, 0)], [(0, 1), (0, 2), (1, 2), (0, 1)], [(0, 2), (0, 1), (2, 1), (0, 2)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 0)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 1)], [(0, 2), (0, 1), (2, 1), (0, 2), (1, 0)], [(0, 2), (0, 1), (2, 1), (0, 2), (1, 2)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 0), (2, 1)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 1), (2, 0)], [(0, 2), (0, 1), (2, 1), (0, 2), (1, 0), (1, 2)], [(0, 2), (0, 1), (2, 1), (0, 2), (1, 2), (1, 0)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 0), (2, 1), (0, 2)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 0), (2, 1), (0, 1)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 1), (2, 0), (1, 0)], [(0, 1), (0, 2), (1, 2), (0, 1), (2, 1), (2, 0), (1, 2)]]
 batchAdd(game, sequences)
 
 game='''
 from typing import List, Any, Optional, Tuple
 class System(AbstractSystem):
     def create_initial_board(self) -> List[int]:
-        return [[1, 0, 0], [1, 1, 0], [0, 1, 1]]
-        
-    def get_legal_moves(self) -> List[Tuple[int, int]]:
-        moves = []
-        for i in range(3):
-            for j in range(3):
-                moves.append((i, j))
-        return moves     
-    
-    def execute_move(self, move: Tuple[int, int]) -> None:
-        i, j = move
-        self.board[i][j],self.board[(i-1)%3][j],self.board[i][(j+1)%3]=self.board[(i-1)%3][j],self.board[i][(j+1)%3],self.board[i][j]
+        return [1, 2, 3, 4, 5]
+
+    def get_legal_moves(self) -> List[int]:
+        # Choose index k (1 to length-1). 
+        # Flip the sub-segment board[0...k]
+        return list(range(1, len(self.board)))
+
+    def execute_move(self, k: int) -> None:
+        # Reverse the first k+1 elements
+        # We act on slice [0 : k+1]
+        subset = self.board[:k+1]
+        self.board[:k+1] = subset[::-1]
 '''
-sequences=[[(0, 0), (0, 0)], [(0, 0), (0, 1)], [(0, 0), (0, 2)], [(0, 0), (1, 0)], [(0, 0), (1, 1)], [(0, 0), (0, 0), (1, 1), (1, 0)], [(0, 0), (0, 0), (1, 2), (1, 1)], [(0, 0), (0, 0), (2, 2), (1, 1)], [(0, 0), (0, 1), (0, 2), (1, 1)], [(0, 0), (0, 1), (0, 2), (1, 2)], [(1, 2), (2, 1), (2, 1), (0, 2), (0, 0), (0, 2)], [(2, 0), (2, 2), (2, 0), (1, 1), (1, 1), (1, 1)], [(0, 1), (0, 2), (1, 1), (0, 0), (2, 0), (0, 0)], [(1, 0), (1, 1), (0, 1), (1, 2), (0, 0), (2, 2)], [(0, 1), (1, 1), (2, 1), (1, 0), (2, 1), (1, 2)], [(2, 2), (0, 1), (0, 0), (1, 2), (2, 0), (1, 2), (2, 2), (2, 0)], [(0, 2), (0, 0), (0, 1), (0, 1), (2, 2), (0, 0), (1, 0), (0, 1)], [(2, 1), (1, 2), (0, 2), (1, 2), (2, 1), (0, 1), (0, 2), (0, 2)], [(2, 0), (0, 0), (0, 2), (2, 2), (2, 1), (2, 1), (2, 2), (0, 2)], [(2, 1), (1, 0), (1, 2), (2, 0), (1, 0), (0, 2), (0, 1), (2, 0)]]
+sequences = [[1, 4], [1, 3], [1, 2], [3, 4], [3, 1], [1, 4, 3], [1, 4, 2], [1, 4, 1], [1, 3, 1], [1, 3, 4], [1, 4, 3, 2], [1, 4, 3, 1], [1, 4, 2, 4], [1, 4, 2, 1], [1, 4, 1, 4], [1, 4, 3, 1, 2], [1, 4, 2, 1, 3], [1, 4, 1, 3, 1], [1, 4, 1, 3, 2], [1, 3, 1, 4, 1]]
 batchAdd(game, sequences)
 
 

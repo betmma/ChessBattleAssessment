@@ -8,6 +8,7 @@ BATCH_GEN_LIMIT = 64
 MAX_TOKENS = 8000
 PROMPT_MAX_TOKENS = 7500 # MAX_TOKENS + PROMPT_MAX_TOKENS should be <= model len when running vllm server
 PPO_MAX_TOKENS = 5500
+CROP_PENALTY_PER_TOKEN = 1e-4 # each cropped token (prompt + response - PPO_MAX_TOKENS) deduct reward by this value
 TEMPERATURE = 0.6
 TOP_P = 0.95
 TOP_K = 20
