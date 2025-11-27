@@ -102,7 +102,7 @@ from peft import LoraConfig
 
 from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
-from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, CROP_PENALTY_PER_TOKEN, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A, USE_FIXED_GAMES
+from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, CROP_PENALTY_PER_TOKEN, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A, USE_FIXED_GAMES, EVAL_ONLY
 )
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
@@ -793,6 +793,9 @@ class EvalContext:
                 sanitized_game = _sanitize_wandb_key(str(game_name))
                 wandb_payload[f'eval/per_game/{sanitized_game}'] = float(acc_val)
             _wandb_log(wandb_payload, commit=True)
+            if EVAL_ONLY:
+                print("Evaluation complete. Exiting.")
+                os._exit(0)
         self.is_complete = True
 
 # ----------------------------
@@ -991,7 +994,7 @@ def get_next_test_game_code():
     testGameCodeIndex+=1
     return code
 
-if EVAL_AT_INIT:
+if EVAL_AT_INIT or EVAL_ONLY:
     trigger_evaluation()  # initial evaluation at startup
 
 # ----------------------------
@@ -1036,7 +1039,7 @@ async def run_workers_and_feed():
                 ctx = PENDING_EVAL_CONTEXTS.pop(0)
                 await enqueue(ctx)
             # If low backlog, add more A to spawn B/C work later
-            if pq.qsize() < BATCH_GEN_LIMIT // 4:
+            if not EVAL_ONLY and pq.qsize() < BATCH_GEN_LIMIT // 4:
                 await new_phase_A()
             await asyncio.sleep(0.005)
 

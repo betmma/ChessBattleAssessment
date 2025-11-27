@@ -23,6 +23,7 @@ GENERATION_LOG = "generations.log"
 EVAL_PERIOD = 4  # means every (EVAL_PERIOD * PERM_SAVE_INTERVAL) PPO updates trigger evaluation after save
 EVAL_RESULTS_FILE = "eval_results.jsonl"
 EVAL_AT_INIT = False # whether to run eval at the very start before any training (though, async will cause some evaluations happen after some ppo updates)
+EVAL_ONLY = False # if True, only run evaluation and exit
 
 # Run configuration constants
 K_MOVES = 8
