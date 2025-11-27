@@ -11,7 +11,7 @@
 #   pip install "trl==0.9.6" "transformers>=4.43" "accelerate" "peft" "torch" "openai>=1.35" "requests" "vllm" "bitsandbytes" "aenum" "vllm<0.10" "transformers<4.54.0" "deepspeed" "wandb"
 #   pip install "trl==0.9.6" "transformers>=4.43" "accelerate" "peft" "torch" "openai>=1.35" "requests" "vllm>0.10" "bitsandbytes" "aenum" "deepspeed" "wandb"
 # export TOKENIZERS_PARALLELISM=true to stop huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks... warning
-# CUDA_VISIBLE_DEVICES=3 accelerate launch --config_file zero1.yaml test.py
+# CUDA_VISIBLE_DEVICES=7 accelerate launch --config_file zero1.yaml test.py
 # export WANDB_PROJECT=trl-ppo
 
 #  A) Generate a Game class (Prompt A)
@@ -478,10 +478,11 @@ class PhaseAContext:
         self.reward_idx = add_sample(self.last_prompt_text, self.last_response_text, None)
         
         # Filter sanity checks
-        filterResult = filterGame(self.last_response_text)
-        if filterResult != FilterGameResult.PASS:
-            finalize_reward([self.reward_idx], filterResult.value, Phase.A, filterResult.name)
-            return
+        if not USE_FIXED_GAMES:
+            filterResult = filterGame(self.last_response_text)
+            if filterResult != FilterGameResult.PASS:
+                finalize_reward([self.reward_idx], filterResult.value, Phase.A, filterResult.name)
+                return
 
         # Extract & compile game
         self.game_code = extract_game(self.last_response_text)
