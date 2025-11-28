@@ -1,7 +1,7 @@
 # ==== PPO + vLLM SERVER (OpenAI API) one-step pipeline for your A/B/C flow ====
 # Start vLLM server first (example):
 # !!REMEMBER TO SET BELOW ENV VAR
-#   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True ; CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 16 --max_model_len 16000 --data-parallel-size 3
+#   export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True ; CUDA_VISIBLE_DEVICES=0,1,2 vllm serve /remote-home1/share/models/Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 16 --max_model_len 16000 --data-parallel-size 3
 
 #   vllm serve /inspire/hdd/global_public/public_models/Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --dtype auto --api-key token-abc123 --enable-lora --max-loras 16 --max-lora-rank 32 --data-parallel-size 7 --data-parallel-size-local 7 --distributed-executor-backend mp --max-model-len 32000
 
@@ -102,7 +102,7 @@ from peft import LoraConfig
 
 from gameFilter import filterGame, FilterGameResult, extract_game, run_game_code_and_get_class
 import enum
-from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, CROP_PENALTY_PER_TOKEN, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A, USE_FIXED_GAMES, EVAL_ONLY
+from settings import (BASE_MODEL, VLLM_URL, VLLM_KEY, KEEP_ACTIVE_ADAPTERS, LORA_RANK, BATCH_GEN_LIMIT, MAX_TOKENS, PROMPT_MAX_TOKENS, PPO_MAX_TOKENS, PENALTY_PER_TOKEN, TEMPERATURE, SAMPLING_EXTRA, LEARNING_RATE, BATCH_SIZE, PERM_SAVE_INTERVAL, LOG_FILE, GAME_COMPLETE_LOG, GENERATION_LOG, K_MOVES, N_GOALS, N_TRIES, THINKING, EVAL_PERIOD, EVAL_RESULTS_FILE, EVAL_AT_INIT, REINFORCE_STYLE, SYNC_REWARDS, DONT_TRAIN_PHASE_A, USE_FIXED_GAMES, EVAL_ONLY
 )
 
 START_TIME_STR=datetime.datetime.now().strftime('_%Y%m%d-%H%M%S')
@@ -436,7 +436,7 @@ class PhaseAContext:
             averageRewardB = sum(bctx.reward_B for bctx in self.children)/len(self.children)
             for gi in range(self.N_goals):
                 bctx = self.children[gi]
-                finalize_reward(bctx.b_sample_indices, bctx.reward_B-averageRewardB, Phase.B, note=(bctx.note or "")+f" deducted average B reward={averageRewardB:.3f}")
+                finalize_reward(bctx.b_sample_indices, bctx.reward_B-averageRewardB, Phase.B, note=(bctx.note or "")+f" deducted average B reward={averageRewardB:.3f}", raw_reward=bctx.reward_B)
             
 
         # All p_i available → finalize Reward-A
@@ -568,10 +568,11 @@ class PhaseBContext:
         p = successes / float(tries) if tries > 0 else 0.0
         if SYNC_REWARDS:
             for c in self.children:
-                reward_c = (1.0 if c.success else 0.0) - p
+                raw_reward_c = (1.0 if c.success else 0.0)
+                reward_c = raw_reward_c - p
                 if c.try_sample_indices:
                     finalize_reward(c.try_sample_indices, reward_c, Phase.C,
-                                    note=f"{'Success' if c.success else 'Fail'} (p={p:.3f})")
+                                    note=f"{'Success' if c.success else 'Fail'} (p={p:.3f})", raw_reward=raw_reward_c)
         self._finalize_B(p, finalize_reward)
 
     def handle(self, enqueue, add_sample, finalize_reward):
@@ -827,17 +828,19 @@ def add_sample(prompt_text: str, response_text: str, reward_value: Optional[floa
     return idx
 
 
-def finalize_reward(idx_list: List[int], value: float, phase: Phase, note: Optional[str] = ''):
+def finalize_reward(idx_list: List[int], reward: float, phase: Phase, note: Optional[str] = '', raw_reward: float|None = None):
     global reward_step
-    t = torch.tensor(float(value), device=ppo.accelerator.device)
+    t = torch.tensor(float(reward), device=ppo.accelerator.device)
+    raw_reward = raw_reward or reward
     for idx in idx_list:
         if rewards[idx] is None:
             rewards[idx] = t
             if not (DONT_TRAIN_PHASE_A and phase == Phase.A):
                 # Filter and enqueue at append-time to keep batch size consistent
                 _enqueue_idx_for_ppo(idx)
-            log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(value), "note": note})
-    wandb_metrics = {"reward_step": float(reward_step),f"reward/{phase.value}": float(value)}
+            log_event({"prompt_text": query_texts[idx], "response_text": response_texts[idx], "phase": phase.value, "reward": float(reward), "note": note, "raw_reward": raw_reward})
+    wandb_metrics = {"reward_step": float(reward_step),f"reward/{phase.value}": float(reward)}
+    wandb_metrics[f"reward/{phase.value}_raw"] = float(raw_reward)
     if len(idx_list) > 1:
         wandb_metrics[f"reward/{phase.value}_num_samples"] = float(len(idx_list))
     _wandb_log(wandb_metrics, commit=True)
@@ -870,15 +873,16 @@ def _enqueue_idx_for_ppo(idx: int) -> None:
     isRewardZeroAndREINFORCE = bool(REINFORCE_STYLE and float(rw.item()) == 0.0)
 
     if not isRewardZeroAndREINFORCE:
+        # reward is deducted by PENALTY_PER_TOKEN * cropped_token_count.
+        rewards[idx] -= PENALTY_PER_TOKEN * resp_token_count
         if query_token_count + resp_token_count <= PPO_MAX_TOKENS:
             prepared_query_ids[idx] = qi
             prepared_resp_ids[idx] = ri
             unsent_indices.append(idx)
         elif query_token_count < PPO_MAX_TOKENS:
             isCropped = True
-            # Crop response to fit. reward is deducted by CROP_PENALTY_PER_TOKEN * cropped_token_count.
+            # Crop response to fit.
             cropped_token_count = query_token_count + resp_token_count - PPO_MAX_TOKENS
-            rewards[idx] -= CROP_PENALTY_PER_TOKEN * cropped_token_count
             allowed_resp_tokens = PPO_MAX_TOKENS - query_token_count
             ri_cropped = ri[:allowed_resp_tokens]
             prepared_query_ids[idx] = qi
