@@ -345,7 +345,7 @@ class AbstractSystem():
 
 PROMPT_A_TMPL = """Write an abstract system that inherits AbstractSystem. The system has a board to store some values and some moves to change values. The board should contain all information of current state, and you cannot set new attributes. You cannot use random module. A "proposer" AI will start from the initial board and make a series of valid moves. The final board state becomes the "goal state." A "solver" AI is then given the initial board, the goal state, and your game code. The primary goal is to make the game difficult for "solver" to find a path (sequential moves) from initial state to goal state. The AbstractSystem class code is as below:\n```\n{BOARD_GAME_CODE}\n```\n Your output must ONLY include the class of your system, beginning with:\n```\nfrom typing import List, Any, Optional, Tuple\nclass System(AbstractSystem):```\nDo NOT repeat the AbstractSystem class. Do NOT write game you knew before. Focus on: when can a value be changed, what operation can be used to change a value. Add new operation instead of adding constraints. System does not need to have any practical meaning, instead chaos is good. THINK QUICKLY"""
 
-PROMPT_B_FIRST_TMPL = """Game code:\n```\n{GAME_CODE}\n```\nYou are generating a challenging but solvable goal state of this game by sequentially playing moves. After which the board will be the goal state for "solver". "Solver" will have the game code and the final state you created, and their task is to make moves to reach the goal state from initial state. You should keep their success rate as low as possible but greater than 0.\nRemaining moves you may still play: {remaining_moves}\nNote that in each reply you can only choose one move, but you can continue in further replies if remaining moves is larger than 1.\nLegal moves: {legal}\nCurrent board:\n{board}\nYou can add some explanation or plan in your response, but must end your response with "#### Move chosen\n X" (without quotes), where X is one of the legal moves exactly as an element appearing in the list above, or DONE to finish early."""
+PROMPT_B_FIRST_TMPL = """Game code:\n```\n{GAME_CODE}\n```\nYou are generating a challenging but solvable goal state of this game by sequentially playing moves. After which the board will be the goal state for "solver". "Solver" will have the game code and the final state you created, and their task is to make moves to reach the goal state from initial state. You should keep their success rate greater than 0 but take as many steps as possible.\nRemaining moves you may still play: {remaining_moves}\nNote that in each reply you can only choose one move, but you can continue in further replies if remaining moves is larger than 1.\nLegal moves: {legal}\nCurrent board:\n{board}\nYou can add some explanation or plan in your response, but must end your response with "#### Move chosen\n X" (without quotes), where X is one of the legal moves exactly as an element appearing in the list above, or DONE to finish early."""
 
 PROMPT_B_CONT_TMPL = """Remaining moves you may still play: {remaining_moves}\nLegal moves: {legal}\nCurrent board:\n{board}\nEnd your response with "#### Move chosen\n X" (without quotes), where X is one of the legal moves exactly as an element appearing in the list above, or DONE to finish early."""
 
@@ -533,9 +533,14 @@ class PhaseBContext:
         if self.success_rate is None:
             self.success_rate = float(p)
         if self.reward_B is None:
-            r_b = max(0.0, 1.0 - self.success_rate)
-            if self.success_rate == 0.0:
-                r_b = 0.0
+            r_b = 0.0
+            success_trace_lengths=[]
+            for phaseC in self.children:
+                if phaseC.success:
+                    success_trace_lengths.append(len(phaseC.moves_trace or []))
+            if success_trace_lengths:
+                average_length = sum(success_trace_lengths)/len(success_trace_lengths)
+                r_b = average_length/K_MOVES
             if force_reward is not None:
                 r_b = force_reward
             self.reward_B = r_b
